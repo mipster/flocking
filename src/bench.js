@@ -7,7 +7,9 @@ const SLOW_MS = 600; // stop growing an engine's fish count once one step costs 
 const DT = 1 / 60;
 
 const $ = (id) => document.getElementById(id);
-const status = (t) => { $('status').textContent = t; };
+const status = (t) => {
+  $('status').textContent = t;
+};
 const countsFor = (n) => {
   const large = Math.max(1, Math.round(n * 0.005));
   const medium = Math.round(n * 0.02);
@@ -33,7 +35,10 @@ async function timeBatches(stepFn, syncFn, budgetMs = 1500) {
 
 async function benchWebGPU(n, device, mode, maxPerCell) {
   const boids = new GpuBoids(device, SPECIES, countsFor(n), { mode, maxPerCell });
-  const ms = await timeBatches(() => boids.step(DT), () => boids.sync());
+  const ms = await timeBatches(
+    () => boids.step(DT),
+    () => boids.sync()
+  );
   boids.destroy();
   return ms;
 }
@@ -46,26 +51,47 @@ async function run() {
   let device = null;
   try {
     device = (await getDevice()).device;
-    engines.push({ name: 'WebGPU brute force', maxN: 262144, run: (n) => benchWebGPU(n, device, 'brute', 0) });
+    engines.push({
+      name: 'WebGPU brute force',
+      maxN: 262144,
+      run: (n) => benchWebGPU(n, device, 'brute', 0),
+    });
     for (const cap of [4, 8, 32]) {
-      engines.push({ name: `WebGPU grid (${cap} samples/cell)`, run: (n) => benchWebGPU(n, device, 'grid', cap) });
+      engines.push({
+        name: `WebGPU grid (${cap} samples/cell)`,
+        run: (n) => benchWebGPU(n, device, 'grid', cap),
+      });
     }
   } catch (e) {
     status(`WebGPU unavailable: ${e.message}`);
   }
 
   const only = new URLSearchParams(location.search).get('only');
-  if (only) engines.splice(0, engines.length, ...engines.filter((e) => e.name.toLowerCase().includes(only.toLowerCase())));
+  if (only)
+    engines.splice(
+      0,
+      engines.length,
+      ...engines.filter((e) => e.name.toLowerCase().includes(only.toLowerCase()))
+    );
 
   const ns = SIDES.map((s) => s * s);
   for (const eng of engines) {
     let stop = false;
     for (const n of ns) {
-      if (stop || n > (eng.maxN ?? Infinity)) { results.push({ engine: eng.name, n, ms: null }); continue; }
+      if (stop || n > (eng.maxN ?? Infinity)) {
+        results.push({ engine: eng.name, n, ms: null });
+        continue;
+      }
       status(`${eng.name} — ${n.toLocaleString()} fish…`);
       await new Promise((r) => setTimeout(r, 30));
       let ms;
-      try { ms = await eng.run(n); } catch (e) { console.error(e); ms = null; stop = true; }
+      try {
+        ms = await eng.run(n);
+      } catch (e) {
+        console.error(e);
+        ms = null;
+        stop = true;
+      }
       results.push({ engine: eng.name, n, ms });
       if (ms === null || ms > SLOW_MS) stop = true;
     }

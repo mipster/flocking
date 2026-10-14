@@ -1,14 +1,19 @@
-import floorWGSL from './floor.wgsl?raw';
 import renderWGSL from './render.wgsl?raw';
 import { buildFishVertices } from './fishGeometry.js';
+import { floorWGSL } from './floor.js';
+import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './layout.js';
+import {
+  CAMERA,
+  DEFAULT_FOG_DENSITY,
+  FLOOR_MESH,
+  FOG_COLOR,
+  LIGHT_DIRECTION,
+  SPECIES_COUNT,
+  wgslHeader,
+} from './config.js';
 
 const DEPTH_FORMAT = 'depth24plus';
 const SAMPLES = 4;
-
-function hexToRgb(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-}
 
 // column-major 4x4 helpers (WebGPU clip space: z in [0, 1])
 function perspective(fovy, aspect, near, far) {
@@ -19,15 +24,32 @@ function perspective(fovy, aspect, near, far) {
 
 function lookAt(eye, target, upv) {
   const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-  const norm = (a) => { const l = Math.hypot(...a); return [a[0] / l, a[1] / l, a[2] / l]; };
+  const norm = (a) => {
+    const l = Math.hypot(...a);
+    return [a[0] / l, a[1] / l, a[2] / l];
+  };
   const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
   const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
   const z = norm(sub(eye, target));
   const x = norm(cross(upv, z));
   const y = cross(z, x);
   return new Float32Array([
-    x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
-    -dot(x, eye), -dot(y, eye), -dot(z, eye), 1,
+    x[0],
+    y[0],
+    z[0],
+    0,
+    x[1],
+    y[1],
+    z[1],
+    0,
+    x[2],
+    y[2],
+    z[2],
+    0,
+    -dot(x, eye),
+    -dot(y, eye),
+    -dot(z, eye),
+    1,
   ]);
 }
 
@@ -48,12 +70,12 @@ export class FishRenderer {
     this.device = device;
     this.canvas = canvas;
     this.species = species;
-    this.fogColor = [4 / 255, 18 / 255, 31 / 255];
-    this.fogDensity = 0.006;
+    this.fogColor = FOG_COLOR;
+    this.fogDensity = DEFAULT_FOG_DENSITY;
     // orbit camera
     this.yaw = 0;
-    this.pitch = 0.2;
-    this.dist = 260;
+    this.pitch = CAMERA.startPitch;
+    this.dist = CAMERA.startDistance;
 
     this.ctx = canvas.getContext('webgpu');
     this.format = navigator.gpu.getPreferredCanvasFormat();
@@ -61,27 +83,39 @@ export class FishRenderer {
 
     const verts = buildFishVertices();
     this.vertexCount = verts.length / 6;
-    this.vbo = device.createBuffer({ size: verts.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    this.vbo = device.createBuffer({
+      size: verts.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
     device.queue.writeBuffer(this.vbo, 0, verts);
 
-    this.ubo = device.createBuffer({ size: 128, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.spBuf = device.createBuffer({ size: 6 * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.ubo = device.createBuffer({
+      size: RENDER_UNIFORM_FLOATS * 4,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.spBuf = device.createBuffer({
+      size: SPECIES_COUNT * 2 * 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
 
-    const module = device.createShaderModule({ code: floorWGSL + renderWGSL });
+    const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + renderWGSL });
     module.getCompilationInfo().then((info) => {
       for (const m of info.messages) console.warn(`WGSL ${m.type} ${m.lineNum}:${m.linePos} ${m.message}`);
     });
     this.pipeline = device.createRenderPipeline({
       layout: 'auto',
       vertex: {
-        module, entryPoint: 'vs',
-        buffers: [{
-          arrayStride: 24,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x3' },
-            { shaderLocation: 1, offset: 12, format: 'float32x3' },
-          ],
-        }],
+        module,
+        entryPoint: 'vs',
+        buffers: [
+          {
+            arrayStride: 24,
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x3' },
+              { shaderLocation: 1, offset: 12, format: 'float32x3' },
+            ],
+          },
+        ],
       },
       fragment: { module, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
@@ -115,17 +149,22 @@ export class FishRenderer {
     this.colorTex?.destroy();
     this.depthTex?.destroy();
     const usage = GPUTextureUsage.RENDER_ATTACHMENT;
-    this.colorTex = this.device.createTexture({ size: [w, h], format: this.format, sampleCount: SAMPLES, usage });
-    this.depthTex = this.device.createTexture({ size: [w, h], format: DEPTH_FORMAT, sampleCount: SAMPLES, usage });
+    this.colorTex = this.device.createTexture({
+      size: [w, h],
+      format: this.format,
+      sampleCount: SAMPLES,
+      usage,
+    });
+    this.depthTex = this.device.createTexture({
+      size: [w, h],
+      format: DEPTH_FORMAT,
+      sampleCount: SAMPLES,
+      usage,
+    });
   }
 
   updateSpecies() {
-    const d = new Float32Array(24);
-    this.species.forEach((s, i) => {
-      d.set([s.scale, 0, 0, 0], i * 8);
-      d.set([...hexToRgb(s.color), 0], i * 8 + 4);
-    });
-    this.device.queue.writeBuffer(this.spBuf, 0, d);
+    this.device.queue.writeBuffer(this.spBuf, 0, packRenderSpecies(this.species));
   }
 
   render(boids) {
@@ -146,34 +185,50 @@ export class FishRenderer {
 
     const aspect = this.size[0] / this.size[1];
     const cp = Math.cos(this.pitch);
-    const eye = [Math.sin(this.yaw) * cp * this.dist, Math.sin(this.pitch) * this.dist, Math.cos(this.yaw) * cp * this.dist];
-    const vp = mul(perspective(55 * Math.PI / 180, aspect, 1, 3000), lookAt(eye, [0, 0, 0], [0, 1, 0]));
-    const light = [0.3, 1.0, 0.4];
-    const ll = Math.hypot(...light);
-    // the floor mesh covers 3x3 tank widths so wrapped fish always have sand beneath them
+    const eye = [
+      Math.sin(this.yaw) * cp * this.dist,
+      Math.sin(this.pitch) * this.dist,
+      Math.cos(this.yaw) * cp * this.dist,
+    ];
+    const proj = perspective((CAMERA.fovDegrees * Math.PI) / 180, aspect, CAMERA.near, CAMERA.far);
+
+    // the floor mesh covers several tank widths so wrapped fish always have sand beneath them
+    const { tiles, spacing, maxCells } = FLOOR_MESH;
     const half = boids.half;
-    const spanX = half[0] * 6;
-    const spanZ = half[2] * 6;
-    const cols = Math.min(500, Math.ceil(spanX / 3));
-    const rows = Math.min(500, Math.ceil(spanZ / 3));
-    const u = new Float32Array(32);
-    u.set(vp, 0);
-    u.set([light[0] / ll, light[1] / ll, light[2] / ll, 0], 16);
-    u.set([...this.fogColor, this.fogDensity], 20);
-    u.set([half[0], half[1], half[2], 0], 24);
-    u.set([cols, rows, spanX, spanZ], 28);
-    device.queue.writeBuffer(this.ubo, 0, u);
+    const spanX = half[0] * 2 * tiles;
+    const spanZ = half[2] * 2 * tiles;
+    const cols = Math.min(maxCells, Math.ceil(spanX / spacing));
+    const rows = Math.min(maxCells, Math.ceil(spanZ / spacing));
+
+    device.queue.writeBuffer(
+      this.ubo,
+      0,
+      packRenderUniforms({
+        viewProj: mul(proj, lookAt(eye, [0, 0, 0], [0, 1, 0])),
+        light: LIGHT_DIRECTION,
+        fogColor: this.fogColor,
+        fogDensity: this.fogDensity,
+        half,
+        floorGrid: [cols, rows, spanX, spanZ],
+      })
+    );
 
     const enc = device.createCommandEncoder();
     const pass = enc.beginRenderPass({
-      colorAttachments: [{
-        view: this.colorTex.createView(),
-        resolveTarget: this.ctx.getCurrentTexture().createView(),
-        clearValue: { r: this.fogColor[0], g: this.fogColor[1], b: this.fogColor[2], a: 1 },
-        loadOp: 'clear', storeOp: 'discard',
-      }],
+      colorAttachments: [
+        {
+          view: this.colorTex.createView(),
+          resolveTarget: this.ctx.getCurrentTexture().createView(),
+          clearValue: { r: this.fogColor[0], g: this.fogColor[1], b: this.fogColor[2], a: 1 },
+          loadOp: 'clear',
+          storeOp: 'discard',
+        },
+      ],
       depthStencilAttachment: {
-        view: this.depthTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard',
+        view: this.depthTex.createView(),
+        depthClearValue: 1,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'discard',
       },
     });
     pass.setPipeline(this.floorPipeline);

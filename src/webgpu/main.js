@@ -3,6 +3,9 @@ import { SPECIES, DEFAULT_COUNTS, TANK_HALF } from '../species.js';
 import { addSpeciesFolders } from '../gui.js';
 import { getDevice, GpuBoids } from './GpuBoids.js';
 import { FishRenderer } from './FishRenderer.js';
+import { CAMERA, DEFAULT_FOG_DENSITY } from './config.js';
+
+const DEBUG = new URLSearchParams(location.search).has('debug');
 
 const canvas = document.getElementById('c');
 const stats = document.getElementById('stats');
@@ -17,14 +20,17 @@ const settings = {
   boundary: 'wrap',
   tankWidth: 240,
   tankDepth: 160,
-  fogDensity: 0.003,
+  fogDensity: DEFAULT_FOG_DENSITY,
   mediumCount: DEFAULT_COUNTS.medium,
   largeCount: DEFAULT_COUNTS.large,
 };
 
 async function main() {
   const { device } = await getDevice();
-  device.lost.then((i) => { msg.style.display = 'block'; msg.textContent = `GPU device lost: ${i.message}`; });
+  device.lost.then((i) => {
+    msg.style.display = 'block';
+    msg.textContent = `GPU device lost: ${i.message}`;
+  });
   device.addEventListener?.('uncapturederror', (e) => console.error('WebGPU error:', e.error.message));
 
   const renderer = new FishRenderer(device, canvas, SPECIES);
@@ -41,21 +47,37 @@ async function main() {
       half: [settings.tankWidth / 2, TANK_HALF[1], settings.tankDepth / 2],
       wrap: settings.boundary === 'wrap',
     });
-    window.__boids = boids; // handy for console inspection
+    if (DEBUG) window.__boids = boids; // console inspection: open the page with ?debug
   }
 
   const gui = new GUI({ title: 'Fish flock (WebGPU)' });
   const g = gui.addFolder('Global');
   g.add(settings, 'total', {
-    '16k': 16384, '65k': 65536, '131k': 131072, '262k': 262144,
-    '524k': 524288, '1M': 1048576, '2M': 2097152,
-  }).name('fish count').onChange(rebuild);
-  g.add(settings, 'mode', { 'spatial grid': 'grid', 'brute force': 'brute' }).name('neighbors')
-    .onChange((v) => { boids.mode = v; });
-  g.add(settings, 'maxPerCell', 1, 64, 1).name('samples / cell')
-    .onChange((v) => { boids.maxPerCell = v; });
-  g.add(settings, 'boundary', { 'wrap around (x, z)': 'wrap', 'soft walls': 'walls' }).name('side edges')
-    .onChange((v) => { boids.wrap = v === 'wrap'; });
+    '16k': 16384,
+    '65k': 65536,
+    '131k': 131072,
+    '262k': 262144,
+    '524k': 524288,
+    '1M': 1048576,
+    '2M': 2097152,
+  })
+    .name('fish count')
+    .onChange(rebuild);
+  g.add(settings, 'mode', { 'spatial grid': 'grid', 'brute force': 'brute' })
+    .name('neighbors')
+    .onChange((v) => {
+      boids.mode = v;
+    });
+  g.add(settings, 'maxPerCell', 1, 64, 1)
+    .name('samples / cell')
+    .onChange((v) => {
+      boids.maxPerCell = v;
+    });
+  g.add(settings, 'boundary', { 'wrap around (x, z)': 'wrap', 'soft walls': 'walls' })
+    .name('side edges')
+    .onChange((v) => {
+      boids.wrap = v === 'wrap';
+    });
   g.add(settings, 'tankWidth', 80, 800, 10).name('tank width').onFinishChange(rebuild);
   g.add(settings, 'tankDepth', 80, 800, 10).name('tank depth').onFinishChange(rebuild);
   g.add(settings, 'speed', 0, 3, 0.05).name('speed ×');
@@ -69,18 +91,30 @@ async function main() {
 
   // orbit camera: drag to rotate, wheel to zoom
   let drag = null;
-  canvas.addEventListener('pointerdown', (e) => { drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
-  canvas.addEventListener('pointerup', () => { drag = null; });
+  canvas.addEventListener('pointerdown', (e) => {
+    drag = [e.clientX, e.clientY];
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointerup', () => {
+    drag = null;
+  });
   canvas.addEventListener('pointermove', (e) => {
     if (!drag) return;
     renderer.yaw -= (e.clientX - drag[0]) * 0.005;
     renderer.pitch = Math.max(-1.5, Math.min(1.5, renderer.pitch + (e.clientY - drag[1]) * 0.005));
     drag = [e.clientX, e.clientY];
   });
-  canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    renderer.dist = Math.max(20, Math.min(400, renderer.dist * Math.exp(e.deltaY * 0.001)));
-  }, { passive: false });
+  canvas.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      renderer.dist = Math.max(
+        CAMERA.minDistance,
+        Math.min(CAMERA.maxDistance, renderer.dist * Math.exp(e.deltaY * 0.001))
+      );
+    },
+    { passive: false }
+  );
 
   // Only submit a new frame once the previous one has finished on the GPU. Otherwise
   // requestAnimationFrame happily queues frames faster than the GPU can draw them, the

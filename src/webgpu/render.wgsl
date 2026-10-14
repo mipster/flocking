@@ -12,9 +12,6 @@ struct RU {
 // per species: [scale, 0, 0, 0], [r, g, b, 0]
 @group(0) @binding(3) var<uniform> SP: array<vec4f, 6>;
 
-const TAIL_AMP = 0.14;
-const TAIL_K = 7.0;
-
 struct VOut {
   @builtin(position) clip: vec4f,
   @location(0) nrm: vec3f,

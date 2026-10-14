@@ -1,9 +1,8 @@
-import floorWGSL from './floor.wgsl?raw';
 import simWGSL from './sim.wgsl?raw';
+import { floorWGSL } from './floor.js';
+import { CELL_SIZE, WALL_MARGIN, WORKGROUP_SIZE, SPECIES_COUNT, wgslHeader } from './config.js';
+import { SIM_PARAMS_FLOATS, SIM_SPECIES_STRIDE, packSimParams, packSimSpecies } from './layout.js';
 import { TANK_HALF as DEFAULT_HALF } from '../species.js';
-
-export const CELL_SIZE = 8;
-const WG = 64;
 
 export async function getDevice() {
   if (!navigator.gpu) throw new Error('WebGPU is not available in this browser');
@@ -18,11 +17,24 @@ export async function getDevice() {
   return { adapter, device };
 }
 
-const ENTRY_POINTS = ['snapshot', 'steerBrute', 'clearCells', 'countCells', 'scanCells', 'scatter', 'steerGrid'];
+const ENTRY_POINTS = [
+  'snapshot',
+  'steerBrute',
+  'clearCells',
+  'countCells',
+  'scanCells',
+  'scatter',
+  'steerGrid',
+];
 
 export class GpuBoids {
   // counts = [small, medium, large]; mode = 'grid' | 'brute'
-  constructor(device, species, counts, { mode = 'grid', maxPerCell = 8, half = DEFAULT_HALF, wrap = true } = {}) {
+  constructor(
+    device,
+    species,
+    counts,
+    { mode = 'grid', maxPerCell = 8, half = DEFAULT_HALF, wrap = true } = {}
+  ) {
     this.device = device;
     this.species = species;
     this.mode = mode;
@@ -46,12 +58,15 @@ export class GpuBoids {
     this.cellStart = mk((this.keys + 1) * 4, S);
     this.keyOf = mk(n * 4, S);
     this.rankOf = mk(n * 4, S);
-    this.params = mk(64, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    this.specBuf = mk(12 * 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    this.params = mk(SIM_PARAMS_FLOATS * 4, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    this.specBuf = mk(
+      SPECIES_COUNT * SIM_SPECIES_STRIDE * 4,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    );
 
     this.upload(counts);
 
-    const module = device.createShaderModule({ code: floorWGSL + simWGSL });
+    const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + simWGSL });
     module.getCompilationInfo().then((info) => {
       for (const m of info.messages) console.warn(`WGSL ${m.type} ${m.lineNum}:${m.linePos} ${m.message}`);
     });
@@ -60,7 +75,11 @@ export class GpuBoids {
       entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
         { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        ...[2, 3, 4, 5, 6, 7, 8, 9].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: storage })),
+        ...[2, 3, 4, 5, 6, 7, 8, 9].map((b) => ({
+          binding: b,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: storage,
+        })),
       ],
     });
     const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
@@ -72,8 +91,16 @@ export class GpuBoids {
     this.bindGroup = device.createBindGroup({
       layout: bgl,
       entries: [
-        b(0, this.params), b(1, this.specBuf), b(2, this.pos), b(3, this.vel), b(4, this.spos),
-        b(5, this.svel), b(6, this.cellCount), b(7, this.cellStart), b(8, this.keyOf), b(9, this.rankOf),
+        b(0, this.params),
+        b(1, this.specBuf),
+        b(2, this.pos),
+        b(3, this.vel),
+        b(4, this.spos),
+        b(5, this.svel),
+        b(6, this.cellCount),
+        b(7, this.cellStart),
+        b(8, this.keyOf),
+        b(9, this.rankOf),
       ],
     });
   }
@@ -104,16 +131,7 @@ export class GpuBoids {
   }
 
   syncSpecies() {
-    const d = new Float32Array(48);
-    this.species.forEach((s, i) => {
-      d.set([
-        s.maxSpeed, s.maxForce, s.sepRadius, s.aliRadius,
-        s.cohRadius, s.sepWeight, s.aliWeight, s.cohWeight,
-        s.fearRadius, s.fearWeight, s.huntRadius, s.huntWeight,
-        s.wander, s.scale, 0, 0,
-      ], i * 16);
-    });
-    this.device.queue.writeBuffer(this.specBuf, 0, d);
+    this.device.queue.writeBuffer(this.specBuf, 0, packSimSpecies(this.species));
   }
 
   // Encodes one simulation step. Returns nothing; call sync() to wait for the GPU.
@@ -121,12 +139,21 @@ export class GpuBoids {
     this.time += dt;
     const q = this.device.queue;
     this.syncSpecies();
-    q.writeBuffer(this.params, 0, new Float32Array([
-      dt, this.time, this.count, this.maxPerCell,
-      this.half[0], this.half[1], this.half[2], 10,
-      CELL_SIZE, this.dims[0], this.dims[1], this.dims[2],
-      this.wrap ? 1 : 0, 0, 0, 0,
-    ]));
+    q.writeBuffer(
+      this.params,
+      0,
+      packSimParams({
+        dt,
+        time: this.time,
+        count: this.count,
+        maxPerCell: this.maxPerCell,
+        half: this.half,
+        wallMargin: WALL_MARGIN,
+        cellSize: CELL_SIZE,
+        dims: this.dims,
+        wrap: this.wrap,
+      })
+    );
 
     const enc = this.device.createCommandEncoder();
     const pass = enc.beginComputePass();
@@ -135,12 +162,12 @@ export class GpuBoids {
       pass.setPipeline(this.pipes[name]);
       pass.dispatchWorkgroups(groups);
     };
-    const nGroups = Math.ceil(this.count / WG);
+    const nGroups = Math.ceil(this.count / WORKGROUP_SIZE);
     if (this.mode === 'brute') {
       run('snapshot', nGroups);
       run('steerBrute', nGroups);
     } else {
-      run('clearCells', Math.ceil(this.keys / WG));
+      run('clearCells', Math.ceil(this.keys / WORKGROUP_SIZE));
       run('countCells', nGroups);
       run('scanCells', 1);
       run('scatter', nGroups);
@@ -155,7 +182,18 @@ export class GpuBoids {
   }
 
   destroy() {
-    for (const k of ['pos', 'vel', 'spos', 'svel', 'cellCount', 'cellStart', 'keyOf', 'rankOf', 'params', 'specBuf']) {
+    for (const k of [
+      'pos',
+      'vel',
+      'spos',
+      'svel',
+      'cellCount',
+      'cellStart',
+      'keyOf',
+      'rankOf',
+      'params',
+      'specBuf',
+    ]) {
       this[k].destroy();
     }
   }

@@ -1,29 +1,64 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Flocking benchmark</title>
-  <style>
-    body { margin: 24px; background: #04121f; color: #cfe8ff; font: 14px/1.5 ui-monospace, Menlo, monospace; }
-    a { color: #7cc4ff; margin-right: 12px; }
-    button { font: inherit; padding: 6px 14px; margin: 12px 0; }
-    table { border-collapse: collapse; margin-top: 12px; }
-    th, td { border: 1px solid #1d4a6e; padding: 4px 12px; text-align: right; }
-    th:first-child, td:first-child { text-align: left; }
-    #status { color: #ffd479; }
-    .skip { color: #6f8aa3; }
-    pre { white-space: pre-wrap; }
-  </style>
-</head>
-<body>
-  <a href="/">Fish demo</a>
-  <h2>Flocking benchmark</h2>
-  <p>Simulation step time only (no drawing), milliseconds per step, lower is better. WebGPU only; same species parameters and mix in every run.</p>
-  <button id="run">Run benchmark</button>
-  <div id="status"></div>
-  <div id="out"></div>
-  <pre id="env"></pre>
-  <script type="module" src="/src/bench.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flocking benchmark</title>
+    <style>
+      body {
+        margin: 24px;
+        background: #04121f;
+        color: #cfe8ff;
+        font:
+          14px/1.5 ui-monospace,
+          Menlo,
+          monospace;
+      }
+      a {
+        color: #7cc4ff;
+        margin-right: 12px;
+      }
+      button {
+        font: inherit;
+        padding: 6px 14px;
+        margin: 12px 0;
+      }
+      table {
+        border-collapse: collapse;
+        margin-top: 12px;
+      }
+      th,
+      td {
+        border: 1px solid #1d4a6e;
+        padding: 4px 12px;
+        text-align: right;
+      }
+      th:first-child,
+      td:first-child {
+        text-align: left;
+      }
+      #status {
+        color: #ffd479;
+      }
+      .skip {
+        color: #6f8aa3;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <a href="/">Fish demo</a>
+    <h2>Flocking benchmark</h2>
+    <p>
+      Simulation step time only (no drawing), milliseconds per step, lower is better. WebGPU only; same
+      species parameters and mix in every run.
+    </p>
+    <button id="run">Run benchmark</button>
+    <div id="status"></div>
+    <div id="out"></div>
+    <pre id="env"></pre>
+    <script type="module" src="/src/bench.js"></script>
+  </body>
 </html>

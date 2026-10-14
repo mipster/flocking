@@ -1,0 +1,118 @@
+import { describe, expect, it } from 'vitest';
+import { SPECIES } from '../species.js';
+import {
+  RENDER_SPECIES_STRIDE,
+  RENDER_UNIFORM_FLOATS,
+  SIM_PARAMS_FLOATS,
+  SIM_SPECIES_STRIDE,
+  hexToRgb,
+  packRenderSpecies,
+  packRenderUniforms,
+  packSimParams,
+  packSimSpecies,
+} from './layout.js';
+
+describe('packSimParams', () => {
+  const p = packSimParams({
+    dt: 0.016,
+    time: 2,
+    count: 1000,
+    maxPerCell: 8,
+    half: [120, 30, 80],
+    wallMargin: 10,
+    cellSize: 8,
+    dims: [30, 8, 20],
+    wrap: true,
+  });
+
+  it('fills exactly four vec4s', () => {
+    expect(p.length).toBe(SIM_PARAMS_FLOATS);
+    expect(SIM_PARAMS_FLOATS).toBe(16);
+  });
+
+  it('places fields where sim.wgsl reads them', () => {
+    expect(Array.from(p.slice(0, 4))).toEqual([expect.closeTo(0.016, 5), 2, 1000, 8]); // a
+    expect(Array.from(p.slice(4, 8))).toEqual([120, 30, 80, 10]); // bounds
+    expect(Array.from(p.slice(8, 12))).toEqual([8, 30, 8, 20]); // grid
+    expect(p[12]).toBe(1); // flags.x = wrap
+  });
+
+  it('encodes wrap off as 0', () => {
+    const q = packSimParams({
+      dt: 0,
+      time: 0,
+      count: 1,
+      maxPerCell: 1,
+      half: [1, 1, 1],
+      wallMargin: 1,
+      cellSize: 1,
+      dims: [1, 1, 1],
+      wrap: false,
+    });
+    expect(q[12]).toBe(0);
+  });
+});
+
+describe('packSimSpecies', () => {
+  const out = packSimSpecies(SPECIES);
+
+  it('has a fixed stride per species', () => {
+    expect(out.length).toBe(3 * SIM_SPECIES_STRIDE);
+  });
+
+  it('keeps each species in its own slot', () => {
+    SPECIES.forEach((s, i) => {
+      const o = i * SIM_SPECIES_STRIDE;
+      expect(out[o]).toBeCloseTo(s.maxSpeed); // vec4 0: maxSpeed
+      expect(out[o + 4]).toBeCloseTo(s.cohRadius); // vec4 1: cohRadius
+      expect(out[o + 8]).toBeCloseTo(s.fearRadius); // vec4 2: fearRadius
+      expect(out[o + 12]).toBeCloseTo(s.wander); // vec4 3: wander
+      expect(out[o + 13]).toBeCloseTo(s.scale); // vec4 3: scale
+    });
+  });
+});
+
+describe('packRenderSpecies', () => {
+  it('stores scale then colour per species', () => {
+    const out = packRenderSpecies(SPECIES);
+    expect(out.length).toBe(3 * RENDER_SPECIES_STRIDE);
+    const [r, g, b] = hexToRgb(SPECIES[1].color);
+    expect(out[RENDER_SPECIES_STRIDE]).toBeCloseTo(SPECIES[1].scale);
+    expect(Array.from(out.slice(RENDER_SPECIES_STRIDE + 4, RENDER_SPECIES_STRIDE + 7))).toEqual([
+      expect.closeTo(r, 5),
+      expect.closeTo(g, 5),
+      expect.closeTo(b, 5),
+    ]);
+  });
+});
+
+describe('hexToRgb', () => {
+  it('parses #rrggbb into 0..1', () => {
+    expect(hexToRgb('#ff8000')).toEqual([1, expect.closeTo(128 / 255, 5), 0]);
+  });
+});
+
+describe('packRenderUniforms', () => {
+  const out = packRenderUniforms({
+    viewProj: new Float32Array(16).fill(1),
+    light: [0, 3, 4],
+    fogColor: [0.1, 0.2, 0.3],
+    fogDensity: 0.005,
+    half: [120, 30, 80],
+    floorGrid: [240, 160, 720, 480],
+  });
+
+  it('is the size render.wgsl expects', () => {
+    expect(out.length).toBe(RENDER_UNIFORM_FLOATS);
+  });
+
+  it('normalises the light direction', () => {
+    expect(Array.from(out.slice(16, 19))).toEqual([0, expect.closeTo(0.6, 5), expect.closeTo(0.8, 5)]);
+  });
+
+  it('places fog, tank and floor grid', () => {
+    expect(out[23]).toBeCloseTo(0.005);
+    expect(Array.from(out.slice(24, 27))).toEqual([120, 30, 80]);
+    expect(Array.from(out.slice(28, 32))).toEqual([240, 160, 720, 480]);
+  });
+});
