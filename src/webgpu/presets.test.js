@@ -7,7 +7,7 @@ import {
   DEFAULT_WAVES,
   WAVE_SCALE_MAX,
 } from './config.js';
-import { DEFAULT_PRESET, PRESETS, PRESET_KEYS, applyPreset } from './presets.js';
+import { DEFAULT_PRESET, PRESETS, PRESET_KEYS, PRESET_RANGES, applyPreset } from './presets.js';
 
 describe('presets', () => {
   it('give every preset exactly the preset keys, as finite non-negative numbers', () => {
@@ -30,6 +30,17 @@ describe('presets', () => {
       waveScale: DEFAULT_WAVES.scale,
       waveSpeed: DEFAULT_WAVES.speed,
     });
+  });
+
+  it('keeps every preset value inside its slider range', () => {
+    expect(Object.keys(PRESET_RANGES).sort()).toEqual([...PRESET_KEYS].sort());
+    for (const [name, p] of Object.entries(PRESETS)) {
+      for (const key of PRESET_KEYS) {
+        const [min, max] = PRESET_RANGES[key];
+        expect(p[key], `${name}.${key}`).toBeGreaterThanOrEqual(min);
+        expect(p[key], `${name}.${key}`).toBeLessThanOrEqual(max);
+      }
+    }
   });
 
   it('keeps wave scale within the mesh-safe limit', () => {

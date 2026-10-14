@@ -63,7 +63,7 @@ export class GpuBoids {
     this.time = 0;
 
     this.dims = this.half.map((h) => Math.ceil((2 * h) / CELL_SIZE));
-    this.keys = this.dims[0] * this.dims[1] * this.dims[2] * 3;
+    this.keys = this.dims[0] * this.dims[1] * this.dims[2] * SPECIES_COUNT;
 
     const S = GPUBufferUsage.STORAGE;
     const mk = (size, usage) => device.createBuffer({ size: Math.max(size, 16), usage });

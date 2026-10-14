@@ -4,6 +4,7 @@ import { addSpeciesFolders } from '../gui.js';
 import { getDevice, GpuBoids } from './GpuBoids.js';
 import { FishRenderer } from './FishRenderer.js';
 import {
+  BRUTE_FORCE_MAX,
   CAMERA,
   DEFAULT_LOOK_HEIGHT,
   DEFAULT_MURKINESS,
@@ -11,11 +12,13 @@ import {
   DEFAULT_SNOW_AMOUNT,
   DEFAULT_VIGNETTE,
   DEFAULT_WAVES,
-  WAVE_SCALE_MAX,
   DEFAULT_STEERING_SMOOTHING,
   FRAMES_IN_FLIGHT,
 } from './config.js';
-import { DEFAULT_PRESET, PRESETS, PRESET_KEYS, applyPreset } from './presets.js';
+import { DEFAULT_PRESET, PRESETS, PRESET_KEYS, PRESET_RANGES, applyPreset } from './presets.js';
+
+/** Longest frame interval (seconds) counted in the on-screen stats. */
+const MAX_SHOWN_INTERVAL = 0.5;
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
@@ -79,6 +82,15 @@ async function main() {
 
   const gui = new GUI({ title: 'Fish flock (WebGPU)' });
   const g = gui.addFolder('Global');
+  // all-pairs mode is O(n^2); past BRUTE_FORCE_MAX it can hang the GPU, so fall back to the grid
+  function capBruteForce() {
+    if (settings.mode !== 'brute' || Number(settings.total) <= BRUTE_FORCE_MAX) return;
+    settings.mode = 'grid';
+    modeControl.updateDisplay();
+    if (boids) boids.mode = 'grid';
+    console.warn(`brute force is limited to ${BRUTE_FORCE_MAX} fish; using the spatial grid`);
+  }
+
   g.add(settings, 'total', {
     '16k': 16384,
     '65k': 65536,
@@ -89,11 +101,16 @@ async function main() {
     '2M': 2097152,
   })
     .name('fish count')
-    .onChange(rebuild);
-  g.add(settings, 'mode', { 'spatial grid': 'grid', 'brute force': 'brute' })
+    .onChange(() => {
+      capBruteForce();
+      rebuild();
+    });
+  const modeControl = g
+    .add(settings, 'mode', { 'spatial grid': 'grid', 'brute force': 'brute' })
     .name('neighbors')
     .onChange((v) => {
       boids.mode = v;
+      capBruteForce();
     });
   g.add(settings, 'maxPerCell', 1, 64, 1)
     .name('samples / cell')
@@ -128,17 +145,8 @@ async function main() {
     settings.preset = 'custom';
     presetControl.updateDisplay();
   };
-  const lookSliders = {
-    murkiness: [0, 4, 'water murkiness'],
-    shafts: [0, 3, 'light shafts'],
-    snow: [0, 2, 'marine snow'],
-    vignette: [0, 1, 'vignette'],
-    waveHeight: [0.1, 3, 'wave height'],
-    waveScale: [0.4, WAVE_SCALE_MAX, 'wave scale (shorter →)'],
-    waveSpeed: [0, 3, 'wave speed'],
-  };
   for (const key of PRESET_KEYS) {
-    const [min, max, label] = lookSliders[key];
+    const [min, max, label] = PRESET_RANGES[key];
     look.add(settings, key, min, max, 0.05).name(label).onChange(markCustom);
   }
   g.add(settings, 'lookHeight', -30, 40, 1).name('camera looks at height');
@@ -222,7 +230,7 @@ async function main() {
     renderer.waveScale = settings.waveScale;
     renderer.waveSpeed = settings.waveSpeed;
     renderer.targetY = settings.lookHeight;
-    if (settings.simulate && !settings.paused) boids.step(dt * settings.speed);
+    if (settings.simulate && !settings.paused && settings.speed > 0) boids.step(dt * settings.speed);
     renderer.render(boids, now / 1000);
 
     inFlight++;
@@ -233,10 +241,12 @@ async function main() {
       // the GPU was busy from this frame's submission, or from when the previous one finished
       const g = finished - Math.max(submitted, lastDone);
       lastDone = finished;
-      gpuMsSum += g;
-      recent.push(raw * 1000);
+      gpuMsSum += Math.min(g, MAX_SHOWN_INTERVAL * 1000);
+      // a hidden tab or a long hitch would otherwise swamp the readout with one huge interval
+      const shown = Math.min(raw, MAX_SHOWN_INTERVAL);
+      recent.push(shown * 1000);
       done++;
-      acc += raw;
+      acc += shown;
       if (acc >= 0.5) {
         // frame intervals over the last window: p50 = typical, worst = biggest hitch
         const iv = recent.splice(0).sort((a, b) => a - b);

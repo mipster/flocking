@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FLOOR, floorHeight, floorWGSL, floorY } from './floor.js';
+import { FLOOR, floorHeight, floorMeshGrid, floorWGSL, floorY } from './floor.js';
 
 const HALF = [120, 30, 80];
 
@@ -36,5 +36,23 @@ describe('floorWGSL', () => {
   it('embeds the same coefficients as the JS reference', () => {
     for (const a of FLOOR.amplitudes) expect(floorWGSL).toContain(String(a));
     expect(floorWGSL).toContain(String(FLOOR.lift));
+  });
+});
+
+describe('floorMeshGrid', () => {
+  const mesh = { tiles: 3, spacing: 3, maxCells: 500 };
+
+  it('covers several tank widths on a normal tank', () => {
+    const g = floorMeshGrid([120, 30, 80], mesh);
+    expect(g.spanX).toBe(720);
+    expect(g.cols).toBe(240);
+    expect(g.rows).toBe(160);
+  });
+
+  it('keeps the vertex spacing when a wide tank hits the cell cap', () => {
+    const g = floorMeshGrid([400, 30, 400], mesh);
+    expect(g.cols).toBeLessThanOrEqual(mesh.maxCells);
+    expect(g.spanX / g.cols).toBeCloseTo(mesh.spacing, 6);
+    expect(g.spanX).toBeGreaterThanOrEqual(800); // still wider than the tank itself
   });
 });

@@ -1,7 +1,7 @@
 import renderWGSL from './render.wgsl?raw';
 import { buildFishVertices } from './fishGeometry.js';
 import { causticsWGSL } from './caustics.js';
-import { FLOOR, floorWGSL } from './floor.js';
+import { FLOOR, floorMeshGrid, floorWGSL } from './floor.js';
 import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './layout.js';
 import {
   CAMERA,
@@ -277,6 +277,9 @@ export class FishRenderer {
   }
 
   resize(w, h) {
+    // a minimised window reports 0 x 0, which is not a valid texture size
+    w = Math.max(1, w);
+    h = Math.max(1, h);
     if (this.size[0] === w && this.size[1] === h) return;
     this.size = [w, h];
     this.canvas.width = w;
@@ -386,16 +389,14 @@ export class FishRenderer {
       Math.cos(this.yaw) * cp * this.dist,
     ];
     // shafts are only drawn from under the water
+    // mean water level: crests and troughs swing around it, and the viewer switches between the
+    // above- and below-water looks (backdrop, surface shading, shafts, snow) at this plane
     const surfaceY = half[1] + WAVE_AMPLITUDE_TOTAL * this.waveHeight;
     const useShafts = this.shaftStrength > 0 && eye[1] < surfaceY;
     const proj = perspective((CAMERA.fovDegrees * Math.PI) / 180, aspect, CAMERA.near, CAMERA.far);
 
     // the floor mesh covers several tank widths so wrapped fish always have sand beneath them
-    const { tiles, spacing, maxCells } = FLOOR_MESH;
-    const spanX = half[0] * 2 * tiles;
-    const spanZ = half[2] * 2 * tiles;
-    const cols = Math.min(maxCells, Math.ceil(spanX / spacing));
-    const rows = Math.min(maxCells, Math.ceil(spanZ / spacing));
+    const { cols, rows, spanX, spanZ } = floorMeshGrid(half, FLOOR_MESH);
 
     // view basis comes straight from the view matrix rows (camera looks down -z)
     const view = lookAt(eye, [0, this.targetY, 0], [0, 1, 0]);

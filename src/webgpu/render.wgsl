@@ -16,7 +16,7 @@ struct RU {
 @group(0) @binding(1) var<storage, read> pos: array<vec4f>;
 @group(0) @binding(2) var<storage, read> vel: array<vec4f>;
 // per species: [scale, glint, 0, 0], [r, g, b, 0]
-@group(0) @binding(3) var<uniform> SP: array<vec4f, 6>;
+@group(0) @binding(3) var<uniform> SP: array<vec4f, SPECIES_COUNT * 2u>;
 // per fish, two vec4s written by fishShade each frame: [sun rgb, colour hash] and [veil rgb, 0]
 @group(0) @binding(4) var<storage, read> shade: array<vec4f>;
 // indices of the fish that survived culling, for this draw (simple or full mesh)
@@ -99,7 +99,7 @@ fn fishShade(@builtin(global_invocation_id) gid: vec3u) {
     visibleFullOut[atomicAdd(&drawArgs[5], 1u)] = i;
   }
   let dl = depthLight(p.y);
-  let focus = causticLight(p.xz, max(R.tank.w - p.y, 0.0), R.waves.w);
+  let focus = causticAt(p);
   let tint = fract(sin(f32(i) * 12.9898) * 43758.5453);
   shadeOut[i * 2u] = vec4f(dl.sun * focus, tint);
   shadeOut[i * 2u + 1u] = vec4f(dl.veil, 0.0);
@@ -213,9 +213,14 @@ fn vnoise(p: vec2f) -> f32 {
     u.y);
 }
 
+// sunlight multiplier from the wave focusing at a world position under the water
+fn causticAt(p: vec3f) -> f32 {
+  return causticLight(p.xz, max(R.tank.w - p.y, 0.0), R.waves.w);
+}
+
 fn floorCaustic(wp: vec3f) -> f32 {
   if (R.camFwd.w < 0.5) { return 1.0; }
-  return causticLight(wp.xz, max(R.tank.w - wp.y, 0.0), R.waves.w);
+  return causticAt(wp);
 }
 
 @fragment
@@ -535,7 +540,7 @@ fn fsSurface(in: SurfaceOut) -> @location(0) vec4f {
   } else {
     // from below: the sky is seen through Snell's window, mirrored water elsewhere
     let nd = -n;
-    let refracted = refract(-v, nd, 1.33);
+    let refracted = refract(-v, nd, WATER_IOR);
     // past the critical angle (refracted == 0) the surface mirrors the water below it; that colour
     // is already hazed, so only the sky seen through the window is attenuated along the way
     let mirror = waterColor(reflect(-v, nd));

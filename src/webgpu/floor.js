@@ -47,3 +47,21 @@ fn floorY(p: vec2f, half: vec3f) -> f32 {
   return -half.y + ${FLOOR.lift} + floorHeight(p, half);
 }
 `;
+
+/**
+ * Grid for the floor and water-surface meshes. They cover `tiles` tank widths in each direction,
+ * but never more than `maxCells` cells, and when a wide tank hits that cap the span shrinks instead
+ * of the cells growing: vertex spacing stays `spacing`, which is what lets the shortest mesh wave
+ * be sampled without aliasing.
+ */
+export function floorMeshGrid(half, { tiles, spacing, maxCells }) {
+  const span = (h) => Math.min(h * 2 * tiles, maxCells * spacing);
+  const spanX = span(half[0]);
+  const spanZ = span(half[2]);
+  return {
+    cols: Math.ceil(spanX / spacing),
+    rows: Math.ceil(spanZ / spacing),
+    spanX,
+    spanZ,
+  };
+}

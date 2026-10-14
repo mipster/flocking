@@ -26,6 +26,9 @@ export const DEFAULT_STEERING_SMOOTHING = 0.1;
  */
 export const FRAMES_IN_FLIGHT = 2;
 
+/** Largest flock the all-pairs (brute force) mode is offered for; beyond it the O(n^2) pass can hang the GPU. */
+export const BRUTE_FORCE_MAX = 262144;
+
 /** Species count; the shaders index uniform arrays by species id. */
 export const SPECIES_COUNT = 3;
 
@@ -127,7 +130,7 @@ const WAVE_TOTAL = WAVES.length + RIPPLES.length;
  * - minDeterminant: floor on the lens Jacobian so focus stays finite on the caustic lines
  */
 export const CAUSTICS = { bend: 0.18, fade: 0.015, base: 0.4, gain: 0.4, minDeterminant: 0.25 };
-const WATER_REFRACTIVE_INDEX = 1.33;
+export const WATER_REFRACTIVE_INDEX = 1.33;
 
 /** Horizontal distance the refracted sun ray travels per unit of depth, as (x, z). */
 export function sunTravelPerDepth() {
@@ -237,6 +240,8 @@ export function wgslHeader() {
   const table = waveTable();
   return `
 const WORKGROUP_SIZE = ${WORKGROUP_SIZE}u;
+const SPECIES_COUNT = ${SPECIES_COUNT}u;
+const WATER_IOR = ${WATER_REFRACTIVE_INDEX};
 const SIMPLE_SPECIES = ${FISH_LOD.simpleSpecies}u;
 const FISH_RADIUS = ${FISH_BOUNDING_RADIUS};
 const TAIL_AMP = ${TAIL.amplitude};

@@ -36,7 +36,7 @@ fn minImage(d: vec3f) -> vec3f {
 @group(0) @binding(0) var<uniform> P: Params;
 // per species, 4 x vec4: [maxSpeed, maxForce, sepR, aliR] [cohR, sepW, aliW, cohW]
 //                        [fearR, fearW, huntR, huntW]     [wander, scale, 0, 0]
-@group(0) @binding(1) var<uniform> SPEC: array<vec4f, 12>;
+@group(0) @binding(1) var<uniform> SPEC: array<vec4f, SPECIES_COUNT * 4u>;
 @group(0) @binding(2) var<storage, read_write> pos: array<vec4f>;   // xyz, species
 @group(0) @binding(3) var<storage, read_write> vel: array<vec4f>;   // xyz, swim phase
 @group(0) @binding(4) var<storage, read_write> spos: array<vec4f>;  // snapshot (cell sorted in grid mode)
@@ -248,7 +248,7 @@ fn steerBrute(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocati
 
 @compute @workgroup_size(WORKGROUP_SIZE)
 fn clearCells(@builtin(global_invocation_id) gid: vec3u) {
-  let keys = u32(P.grid.y * P.grid.z * P.grid.w) * 3u;
+  let keys = u32(P.grid.y * P.grid.z * P.grid.w) * SPECIES_COUNT;
   if (gid.x < keys) { atomicStore(&cellCount[gid.x], 0u); }
 }
 
@@ -260,13 +260,13 @@ fn countCells(@builtin(global_invocation_id) gid: vec3u) {
   let c = cellOfPos(p.xyz);
   let d = gridDims();
   let cell = u32((c.z * d.y + c.y) * d.x + c.x);
-  let key = cell * 3u + u32(p.w + 0.5);
+  let key = cell * SPECIES_COUNT + u32(p.w + 0.5);
   keyRank[i] = vec2u(key, atomicAdd(&cellCount[key], 1u));
 }
 
 @compute @workgroup_size(1)
 fn scanCells() {
-  let keys = u32(P.grid.y * P.grid.z * P.grid.w) * 3u;
+  let keys = u32(P.grid.y * P.grid.z * P.grid.w) * SPECIES_COUNT;
   var sum = 0u;
   for (var k = 0u; k < keys; k++) {
     cellStart[k] = sum;
@@ -323,8 +323,8 @@ fn steerGrid(@builtin(global_invocation_id) gid: vec3u) {
 
         let cx = select(x, wrapIdx(x, dims.x), wrap);
         let cell = u32((z * dims.y + y) * dims.x + cx);
-        for (var s = 0u; s < 3u; s++) {
-          let key = cell * 3u + s;
+        for (var s = 0u; s < SPECIES_COUNT; s++) {
+          let key = cell * SPECIES_COUNT + s;
           let start = cellStart[key];
           let cnt = cellStart[key + 1u] - start;
           if (cnt == 0u) { continue; }

@@ -11,7 +11,7 @@ npm run dev
 
 Then open http://localhost:5173. A production build is available with `npm run build`.
 
-Requires a browser with WebGPU (Chrome, Edge or Brave 113+ on macOS, Windows and ChromeOS).
+Requires a browser with WebGPU (Chrome, Edge or Brave 113+ on macOS, Windows and ChromeOS) and Node 20.19 or newer (22.12+ also works) to run the dev server.
 
 - **Viewer** (`/`): the flock. Fish count (16k to 2M), neighbor mode (spatial grid or brute force), samples per cell, left/right edges (wrap around or soft walls), tank width and depth, and exact medium and large fish counts are in the panel.
 - **Benchmark** (`/bench.html`): times simulation steps for WebGPU brute force and the grid at 4k to 1M fish. Keep the tab visible while it runs, because a hidden tab can skip GPU work and give bogus numbers.
@@ -50,7 +50,8 @@ Three species, each with its own speed, force limit and flocking weights:
 - **Global panel (top right)**: fish count (16k to 2M), neighbor mode, samples per cell, left/right edges, tank width and depth, steering smoothing, speed, pause, camera look height, and exact medium and large fish counts. Each species folder exposes every steering parameter and applies it live.
 - **Water look**: a **preset** dropdown (Reef, Clear shallows, Deep blue, Murky bay, Stormy) sets water murkiness, light shafts, marine snow, vignette and the three wave sliders (**wave height**, **wave scale**, **wave speed**) together. Moving any of those sliders by hand switches the dropdown to "custom". Presets live in `src/webgpu/presets.js`.
 - **Bottom left**: FPS, GPU time per frame, frame time and fish count.
-- **`?debug`**: adds profiling switches (simulate, draw fish, surface, sea floor, marine snow, frustum culling, sand caustics, pixel ratio) and exposes `window.__boids` and `window.__renderer`. Add `&msaa=1` to turn multisampling off.
+- **`?debug`**: adds profiling switches (simulate, draw fish, surface, sea floor, marine snow, frustum culling, sand caustics, pixel ratio) and exposes `window.__boids` and `window.__renderer`.
+- **`?msaa=1`**: turns multisampling off, which is much cheaper with very many fish (works with or without `?debug`).
 
 ## How it works
 
@@ -58,7 +59,7 @@ Three species, each with its own speed, force limit and flocking weights:
 - **Spatial grid**: fish are counting-sorted into (cell, species) buckets each frame, and each fish scans only nearby cells, taking a capped number of samples per bucket. Brute force (tiled through workgroup memory) is available for comparison.
 - **Boundaries**: the floor, surface, near and far walls are hard barriers. The left and right edges either wrap around (same direction and velocity, neighbors found across the seam) or are soft walls.
 - Fish outside the view are culled by a compute pass that builds the draw lists, and the draws are indirect. The viewer keeps two frames in flight so CPU and GPU overlap.
-- Small fish use a ~20-triangle mesh and the larger species a ~70-triangle one (`FISH_LOD` in `config.js`), and per-fish water lighting is computed once per fish rather than per vertex. Open the viewer with `?debug` for per-layer profiling switches, and add `&msaa=1` to turn multisampling off.
+- Small fish use a ~20-triangle mesh and the larger species a ~70-triangle one (`FISH_LOD` in `config.js`), and per-fish water lighting is computed once per fish rather than per vertex. Open the viewer with `?debug` for per-layer profiling switches.
 - The fish vertex shader builds an orientation basis from the velocity and bends the tail with the swim phase.
 - **Water**: Beer-Lambert absorption per colour channel (red goes first) dims sunlight with depth and tints distant objects, with veiling light filling in, plus a gradient backdrop with a sun glow. The **water murkiness** slider scales it.
 - **Surface**: Gerstner waves, drawn translucent. From above you see through it with a Fresnel sky and sun reflection; from below you see the sky through Snell's window, and a mirror of the water beyond the critical angle. **camera looks at height** tilts the view up at it.

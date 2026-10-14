@@ -6,6 +6,7 @@ import {
   DEFAULT_SNOW_AMOUNT,
   DEFAULT_VIGNETTE,
   DEFAULT_WAVES,
+  WAVE_SCALE_MAX,
 } from './config.js';
 
 /** `settings` keys a preset may set. */
@@ -18,6 +19,17 @@ export const PRESET_KEYS = [
   'waveScale',
   'waveSpeed',
 ];
+
+/** Slider range and label for each preset key, so presets can be checked against what the panel allows. */
+export const PRESET_RANGES = {
+  murkiness: [0, 4, 'water murkiness'],
+  shafts: [0, 3, 'light shafts'],
+  snow: [0, 2, 'marine snow'],
+  vignette: [0, 1, 'vignette'],
+  waveHeight: [0.1, 3, 'wave height'],
+  waveScale: [0.4, WAVE_SCALE_MAX, 'wave scale (shorter →)'],
+  waveSpeed: [0, 3, 'wave speed'],
+};
 
 export const DEFAULT_PRESET = 'Reef';
 

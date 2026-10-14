@@ -46,8 +46,18 @@ describe('wgslHeader', () => {
     expect(header).not.toMatch(/NaN|undefined|Infinity/);
   });
 
-  it('keeps the fish ceiling reachable: wave troughs stay above the tank top', () => {
+  it('sums the mesh waves for the water level, so troughs reach no lower than the tank top', () => {
+    // the surface sits WAVE_AMPLITUDE_TOTAL above the tank top and no wave dips further than its amplitude
+    expect(WAVE_AMPLITUDE_TOTAL).toBeCloseTo(
+      WAVES.reduce((sum, w) => sum + w.amplitude, 0),
+      9
+    );
     expect(WAVE_AMPLITUDE_TOTAL).toBeGreaterThan(0);
+  });
+
+  it('injects the species count and refractive index the shaders rely on', () => {
+    expect(header).toContain('const SPECIES_COUNT = 3u;');
+    expect(header).toContain('const WATER_IOR = 1.33;');
   });
 });
 
