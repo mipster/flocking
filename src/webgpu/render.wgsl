@@ -1,7 +1,7 @@
 struct RU {
   viewProj: mat4x4f,
   light: vec4f,     // xyz = direction toward the sun
-  absorb: vec4f,    // rgb = extinction per unit (already scaled by murkiness)
+  absorb: vec4f,    // rgb = extinction per unit (already scaled by murkiness), a = light shaft strength
   tank: vec4f,      // half extents xyz, a = mean water surface height
   floorGrid: vec4f, // cols, rows, world span x, world span z
   camRight: vec4f,  // xyz, a = tan(fov/2) * aspect
@@ -19,6 +19,9 @@ struct RU {
 @group(0) @binding(4) var<storage, read> shade: array<vec4f>;
 // indices of the fish that survived culling, for this draw (simple or full mesh)
 @group(0) @binding(6) var<storage, read> visible: array<u32>;
+// light shafts: the half-size shaft image the composite pass adds on top of the frame
+@group(0) @binding(11) var shaftTex: texture_2d<f32>;
+@group(0) @binding(12) var shaftSampler: sampler;
 // fishShade (compute) only: writable views of the same data, bound with `pos`, SP and the uniforms
 @group(0) @binding(5) var<storage, read_write> shadeOut: array<vec4f>;
 @group(0) @binding(7) var<storage, read_write> visibleSimpleOut: array<u32>;
@@ -243,6 +246,55 @@ fn fsFloor(in: FloorOut) -> @location(0) vec4f {
   let lambert = max(dot(n, R.light.xyz), 0.0);
   let col = sand * (0.22 + 0.9 * lambert);
   return vec4f(underwater(col, in.sun * floorCaustic(in.wp), in.veil, in.dist), 1.0);
+}
+
+// ---- light shafts ----------------------------------------------------------------
+
+fn interleavedNoise(p: vec2f) -> f32 {
+  return fract(52.9829189 * fract(dot(p, vec2f(0.06711056, 0.00583715))));
+}
+
+// Single-scattered sunlight along each view ray, from the camera up to the range limit, the water
+// surface, or the sea floor (whichever comes first; fish are too small to occlude beams, and
+// ignoring them avoids holes where the depth buffer jumps between fish and background). Runs at
+// reduced resolution into an additive layer.
+@fragment
+fn fsShaft(in: BgOut) -> @location(0) vec4f {
+  // ray with unit forward component, so the march parameter t equals view depth
+  let ray = R.camFwd.xyz + in.ndc.x * R.camRight.xyz * R.camRight.w + in.ndc.y * R.camUp.xyz * R.camUp.w;
+  let rayLen = length(ray);
+  var tEnd = SHAFT_RANGE / rayLen;
+  if (ray.y > 0.0) { tEnd = min(tEnd, max(R.tank.w - R.camPos.y, 0.0) / ray.y); }
+  if (tEnd <= 0.0) { return vec4f(0.0); }
+
+  let jitter = interleavedNoise(in.clip.xy);
+  let stepT = tEnd / f32(SHAFT_STEPS);
+  var sum = vec3f(0.0);
+  for (var i = 0; i < SHAFT_STEPS; i++) {
+    let t = (f32(i) + jitter) * stepT;
+    let p = R.camPos.xyz + ray * t;
+    if (p.y < floorY(p.xz, R.tank.xyz)) { break; }
+    let depth = max(R.tank.w - p.y, 0.0);
+    let focus = shaftFocus(p.xz, depth, R.camPos.w);
+    let density = SHAFT_BASE + SHAFT_GAIN * max(focus - 1.0, 0.0);
+    // sunlight reaching the point, then the part of it that survives the trip to the eye
+    sum += exp(-R.absorb.xyz * (depth + t * rayLen)) * density;
+  }
+
+  // forward scattering: brighter when looking toward the sun
+  let cosTheta = dot(ray / rayLen, R.light.xyz);
+  let g2 = SHAFT_G * SHAFT_G;
+  let phase = (1.0 - g2) / pow(1.0 + g2 - 2.0 * SHAFT_G * cosTheta, 1.5);
+  let light = sum * stepT * rayLen * phase * SHAFT_STRENGTH * R.absorb.w;
+  // soft clip so a bright beam saturates smoothly instead of blowing out
+  return vec4f((vec3f(1.0) - exp(-light * SHAFT_COLOR)), 0.0);
+}
+
+// Adds the shaft image to the finished frame (blend state does the adding).
+@fragment
+fn fsComposite(in: BgOut) -> @location(0) vec4f {
+  let uv = vec2f(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
+  return textureSampleLevel(shaftTex, shaftSampler, uv, 0.0);
 }
 
 // ---- backdrop -----------------------------------------------------------------

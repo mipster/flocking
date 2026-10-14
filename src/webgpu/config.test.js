@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LIGHT_DIRECTION,
   RIPPLES,
+  SHAFTS,
   WAVES,
   WAVE_AMPLITUDE_TOTAL,
   sunTravelPerDepth,
@@ -62,6 +63,15 @@ describe('sunTravelPerDepth', () => {
     const air = Math.hypot(LIGHT_DIRECTION[0], LIGHT_DIRECTION[2]) / LIGHT_DIRECTION[1];
     expect(Math.hypot(x, z)).toBeLessThan(air);
     expect(Math.hypot(x, z)).toBeGreaterThan(0);
+  });
+});
+
+describe('SHAFTS', () => {
+  it('uses a valid number of waves and a sane step count', () => {
+    expect(SHAFTS.waves).toBeGreaterThanOrEqual(WAVES.length);
+    expect(SHAFTS.waves).toBeLessThanOrEqual(WAVES.length + RIPPLES.length);
+    expect(SHAFTS.steps).toBeGreaterThan(0);
+    expect(wgslHeader()).toContain(`const SHAFT_WAVES = ${SHAFTS.waves}u;`);
   });
 });
 

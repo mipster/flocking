@@ -139,6 +139,33 @@ export function sunTravelPerDepth() {
 }
 
 /**
+ * Light shafts: sunlight scattered toward the camera by the water, integrated along each view ray
+ * and modulated by the same wave focusing that makes the caustics, so beams sway with the waves.
+ * - steps: samples per ray (jittered per pixel to hide banding)
+ * - range: farthest distance marched, in world units
+ * - waves: how many entries of the wave table shape the beams (finer ones would alias)
+ * - scale: size of the shaft render target relative to the screen (it is soft, so half is fine)
+ * - strength: overall brightness at slider value 1
+ * - base/gain: density = base + gain * max(focus - 1, 0): a faint haze everywhere, beams where focused
+ * - fade: how fast beam contrast washes out with depth (slower than the sand caustics)
+ * - anisotropy: Henyey-Greenstein g; above 0 the haze is brighter looking toward the sun
+ * - color: tint of the scattered light
+ */
+export const SHAFTS = {
+  steps: 20,
+  range: 220,
+  waves: WAVES.length + 2, // mesh waves plus the two longest ripples
+  scale: 0.5,
+  strength: 0.008,
+  base: 0.03,
+  gain: 2.5,
+  fade: 0.004,
+  anisotropy: 0.35,
+  color: [0.75, 0.95, 1.0],
+};
+export const DEFAULT_SHAFT_STRENGTH = 1;
+
+/**
  * Sun glint on fish scales: a tight specular flash from the flanks, scaled per species by its
  * `glint` setting. It rides on the fish's caustic-lit sunlight, so it pulses with the caustics.
  */
@@ -173,6 +200,15 @@ const CAUSTIC_FADE = ${CAUSTICS.fade};
 const CAUSTIC_BASE = ${CAUSTICS.base};
 const CAUSTIC_GAIN = ${CAUSTICS.gain};
 const CAUSTIC_MIN_DET = ${CAUSTICS.minDeterminant};
+const SHAFT_STEPS = ${SHAFTS.steps};
+const SHAFT_WAVES = ${SHAFTS.waves}u;
+const SHAFT_RANGE = ${SHAFTS.range};
+const SHAFT_STRENGTH = ${SHAFTS.strength};
+const SHAFT_BASE = ${SHAFTS.base};
+const SHAFT_GAIN = ${SHAFTS.gain};
+const SHAFT_FADE = ${SHAFTS.fade};
+const SHAFT_G = ${SHAFTS.anisotropy};
+const SHAFT_COLOR = vec3f(${SHAFTS.color.join(', ')});
 const SUN_TRAVEL = vec2f(${sunTravelPerDepth().join(', ')});
 const WAVES = array<vec4f, ${WAVE_TOTAL}>(${table.map((w) => `vec4f(${w.shape.join(', ')})`).join(', ')});
 const WAVE_DYNAMICS = array<vec2f, ${WAVE_TOTAL}>(${table.map((w) => `vec2f(${w.dynamics.join(', ')})`).join(', ')});

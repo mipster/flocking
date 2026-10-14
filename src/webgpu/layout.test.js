@@ -126,6 +126,8 @@ describe('packRenderUniforms', () => {
   it('carries the culling and sand-caustic switches in the spare w components', () => {
     expect(out[19]).toBe(1); // light.w = frustum culling on by default
     expect(out[43]).toBe(1); // camFwd.w = sand caustics on by default
+    expect(out[23]).toBe(0); // absorb.w = light shafts off unless asked for
+    expect(packRenderUniforms({ ...args, shaftStrength: 1.5 })[23]).toBe(1.5);
     const off = packRenderUniforms({ ...args, cull: false, floorCaustics: false });
     expect(off[19]).toBe(0);
     expect(off[43]).toBe(0);

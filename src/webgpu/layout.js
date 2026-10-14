@@ -111,7 +111,7 @@ export const RENDER_UNIFORM_FLOATS = 48;
  * render.wgsl `RU`:
  *   viewProj  : mat4x4f (column-major)
  *   light     = (direction toward the sun xyz, frustum culling on = 1 / off = 0)
- *   absorb    = (extinction rgb per unit, 0)
+ *   absorb    = (extinction rgb per unit, light shaft strength)
  *   tank      = (half.x, half.y, half.z, mean water surface height)
  *   floorGrid = (cols, rows, world span x, world span z)
  *   camRight  = (right xyz, tan(fov/2) * aspect)
@@ -130,12 +130,13 @@ export function packRenderUniforms({
   camera,
   floorCaustics = true,
   cull = true,
+  shaftStrength = 0,
 }) {
   const out = new Float32Array(RENDER_UNIFORM_FLOATS);
   const l = Math.hypot(...light);
   out.set(viewProj, 0);
   out.set([light[0] / l, light[1] / l, light[2] / l, cull ? 1 : 0], 16);
-  out.set([...absorption, 0], 20);
+  out.set([...absorption, shaftStrength], 20);
   out.set([half[0], half[1], half[2], surfaceY], 24);
   out.set(floorGrid, 28);
   out.set([...camera.right, camera.tanHalfX], 32);

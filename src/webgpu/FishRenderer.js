@@ -6,9 +6,11 @@ import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './
 import {
   CAMERA,
   DEFAULT_MURKINESS,
+  DEFAULT_SHAFT_STRENGTH,
   FISH_LOD,
   FLOOR_MESH,
   LIGHT_DIRECTION,
+  SHAFTS,
   SPECIES_COUNT,
   WORKGROUP_SIZE,
   WATER,
@@ -18,6 +20,7 @@ import {
 
 const DEPTH_FORMAT = 'depth24plus';
 const DEFAULT_SAMPLES = 4; // WebGPU allows 1 or 4
+const SHAFT_FORMAT = 'rgba16float';
 
 // column-major 4x4 helpers (WebGPU clip space: z in [0, 1])
 function perspective(fovy, aspect, near, far) {
@@ -76,6 +79,7 @@ export class FishRenderer {
     this.canvas = canvas;
     this.species = species;
     this.murkiness = DEFAULT_MURKINESS;
+    this.shaftStrength = DEFAULT_SHAFT_STRENGTH;
     // orbit camera
     this.yaw = 0;
     this.pitch = CAMERA.startPitch;
@@ -175,6 +179,36 @@ export class FishRenderer {
       entries: [{ binding: 0, resource: { buffer: this.ubo } }],
     });
 
+    // light shafts: march the view rays into a reduced-size image, then add it to the frame
+    const single = { count: 1 };
+    this.shaftPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsBg' },
+      fragment: { module, entryPoint: 'fsShaft', targets: [{ format: SHAFT_FORMAT }] },
+      primitive: { topology: 'triangle-list' },
+      multisample: single,
+    });
+    const additive = {
+      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+      alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
+    };
+    this.compositePipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsBg' },
+      fragment: {
+        module,
+        entryPoint: 'fsComposite',
+        targets: [{ format: this.format, blend: additive }],
+      },
+      primitive: { topology: 'triangle-list' },
+      multisample: single,
+    });
+    this.shaftBindGroup = device.createBindGroup({
+      layout: this.shaftPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
+    });
+    this.shaftSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+
     this.shadePipeline = device.createComputePipeline({
       layout: 'auto',
       compute: { module, entryPoint: 'fishShade' },
@@ -201,6 +235,7 @@ export class FishRenderer {
     this.canvas.height = h;
     this.colorTex?.destroy();
     this.depthTex?.destroy();
+    this.shaftTex?.destroy();
     const usage = GPUTextureUsage.RENDER_ATTACHMENT;
     // without multisampling the scene is drawn straight into the canvas texture
     this.colorTex =
@@ -212,6 +247,18 @@ export class FishRenderer {
       format: DEPTH_FORMAT,
       sampleCount: this.samples,
       usage,
+    });
+    this.shaftTex = this.device.createTexture({
+      size: [Math.max(1, Math.round(w * SHAFTS.scale)), Math.max(1, Math.round(h * SHAFTS.scale))],
+      format: SHAFT_FORMAT,
+      usage: usage | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.compositeBindGroup = this.device.createBindGroup({
+      layout: this.compositePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 11, resource: this.shaftTex.createView() },
+        { binding: 12, resource: this.shaftSampler },
+      ],
     });
   }
 
@@ -286,6 +333,8 @@ export class FishRenderer {
       Math.max(this.targetY + Math.sin(this.pitch) * this.dist, lowestEyeY),
       Math.cos(this.yaw) * cp * this.dist,
     ];
+    // shafts are only drawn from under the water
+    const useShafts = this.shaftStrength > 0 && eye[1] < half[1] + WAVE_AMPLITUDE_TOTAL;
     const proj = perspective((CAMERA.fovDegrees * Math.PI) / 180, aspect, CAMERA.near, CAMERA.far);
 
     // the floor mesh covers several tank widths so wrapped fish always have sand beneath them
@@ -311,6 +360,7 @@ export class FishRenderer {
         time,
         floorCaustics: this.layers.floorCaustics,
         cull: this.layers.cull,
+        shaftStrength: useShafts ? this.shaftStrength : 0,
         floorGrid: [cols, rows, spanX, spanZ],
         camera: {
           right: [view[0], view[4], view[8]],
@@ -379,6 +429,31 @@ export class FishRenderer {
       pass.draw(cols * rows * 6);
     }
     pass.end();
+
+    if (useShafts) {
+      const shafts = enc.beginRenderPass({
+        colorAttachments: [
+          {
+            view: this.shaftTex.createView(),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          },
+        ],
+      });
+      shafts.setPipeline(this.shaftPipeline);
+      shafts.setBindGroup(0, this.shaftBindGroup);
+      shafts.draw(3);
+      shafts.end();
+
+      const composite = enc.beginRenderPass({
+        colorAttachments: [{ view: canvasTex.createView(), loadOp: 'load', storeOp: 'store' }],
+      });
+      composite.setPipeline(this.compositePipeline);
+      composite.setBindGroup(0, this.compositeBindGroup);
+      composite.draw(3);
+      composite.end();
+    }
     device.queue.submit([enc.finish()]);
   }
 }

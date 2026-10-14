@@ -7,6 +7,7 @@ import {
   CAMERA,
   DEFAULT_LOOK_HEIGHT,
   DEFAULT_MURKINESS,
+  DEFAULT_SHAFT_STRENGTH,
   DEFAULT_STEERING_SMOOTHING,
   FRAMES_IN_FLIGHT,
 } from './config.js';
@@ -27,6 +28,7 @@ const settings = {
   tankWidth: 240,
   tankDepth: 160,
   murkiness: DEFAULT_MURKINESS,
+  shafts: DEFAULT_SHAFT_STRENGTH,
   lookHeight: DEFAULT_LOOK_HEIGHT,
   smoothing: DEFAULT_STEERING_SMOOTHING,
   mediumCount: DEFAULT_COUNTS.medium,
@@ -102,6 +104,7 @@ async function main() {
   g.add(settings, 'speed', 0, 3, 0.05).name('speed ×');
   g.add(settings, 'paused').name('pause');
   g.add(settings, 'murkiness', 0, 4, 0.05).name('water murkiness');
+  g.add(settings, 'shafts', 0, 3, 0.05).name('light shafts');
   g.add(settings, 'lookHeight', -30, 40, 1).name('camera looks at height');
   g.add(settings, 'mediumCount', 0, 20000, 1).name('medium fish').onFinishChange(rebuild);
   g.add(settings, 'largeCount', 0, 2000, 1).name('large fish').onFinishChange(rebuild);
@@ -172,6 +175,7 @@ async function main() {
     const dpr = Math.min(window.devicePixelRatio, settings.pixelRatio);
     renderer.resize(Math.floor(window.innerWidth * dpr), Math.floor(window.innerHeight * dpr));
     renderer.murkiness = settings.murkiness;
+    renderer.shaftStrength = settings.shafts;
     renderer.targetY = settings.lookHeight;
     if (settings.simulate && !settings.paused) boids.step(dt * settings.speed);
     renderer.render(boids, now / 1000);
