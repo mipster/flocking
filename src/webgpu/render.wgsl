@@ -9,6 +9,7 @@ struct RU {
   camFwd: vec4f,    // xyz, a = sand caustics on (1) / off (0)
   camPos: vec4f,    // xyz = camera world position, a = time in seconds
   post: vec4f,      // x = vignette strength
+  waves: vec4f,     // x = wave height scale, y = wavenumber scale, w = wave clock (seconds)
 };
 
 @group(0) @binding(0) var<uniform> R: RU;
@@ -98,7 +99,7 @@ fn fishShade(@builtin(global_invocation_id) gid: vec3u) {
     visibleFullOut[atomicAdd(&drawArgs[5], 1u)] = i;
   }
   let dl = depthLight(p.y);
-  let focus = causticLight(p.xz, max(R.tank.w - p.y, 0.0), R.camPos.w);
+  let focus = causticLight(p.xz, max(R.tank.w - p.y, 0.0), R.waves.w);
   let tint = fract(sin(f32(i) * 12.9898) * 43758.5453);
   shadeOut[i * 2u] = vec4f(dl.sun * focus, tint);
   shadeOut[i * 2u + 1u] = vec4f(dl.veil, 0.0);
@@ -214,7 +215,7 @@ fn vnoise(p: vec2f) -> f32 {
 
 fn floorCaustic(wp: vec3f) -> f32 {
   if (R.camFwd.w < 0.5) { return 1.0; }
-  return causticLight(wp.xz, max(R.tank.w - wp.y, 0.0), R.camPos.w);
+  return causticLight(wp.xz, max(R.tank.w - wp.y, 0.0), R.waves.w);
 }
 
 @fragment
@@ -300,7 +301,7 @@ fn fsShaft(in: BgOut) -> @location(0) vec4f {
     let p = R.camPos.xyz + ray * t;
     if (p.y < floorY(p.xz, R.tank.xyz)) { break; }
     let depth = max(R.tank.w - p.y, 0.0);
-    let focus = shaftFocus(p.xz, depth, R.camPos.w);
+    let focus = shaftFocus(p.xz, depth, R.waves.w);
     let density = (SHAFT_BASE + SHAFT_GAIN * max(focus - 1.0, 0.0)) * hazePatch(p, R.camPos.w);
     // sunlight reaching the point, then the part of it that survives the trip to the eye
     sum += exp(-R.absorb.xyz * (depth + t * rayLen)) * density;
@@ -378,7 +379,7 @@ fn vsSnow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> S
 
   let dl = depthLight(p.y);
   let depth = max(R.tank.w - p.y, 0.0);
-  let focus = shaftFocus(p.xz, depth, t);
+  let focus = shaftFocus(p.xz, depth, R.waves.w);
   let beam = 1.0 + SNOW_BEAM * clamp(focus - 1.0, 0.0, 2.0);
   let base = vec3f(0.85, 0.92, 0.95) * SNOW_BRIGHTNESS * (0.4 + 0.6 * snowHash(ii, 5.0)) * beam;
 
@@ -458,10 +459,10 @@ fn fsBg(in: BgOut) -> @location(0) vec4f {
 fn waveDisplace(xz: vec2f, t: f32) -> vec3f {
   var d = vec3f(0.0);
   for (var i = 0u; i < WAVE_MESH_COUNT; i++) {
-    let w = WAVES[i];
+    let w = waveShape(i);
     let phase = wavePhase(i, xz, t);
     let c = cos(phase);
-    let q = WAVE_DYNAMICS[i].y;
+    let q = waveSteepness(i);
     d.x += q * w.z * w.x * c;
     d.z += q * w.z * w.y * c;
     d.y += w.z * sin(phase);
@@ -473,12 +474,12 @@ fn waveDisplace(xz: vec2f, t: f32) -> vec3f {
 fn waveNormal(xz: vec2f, t: f32) -> vec3f {
   var n = vec3f(0.0, 1.0, 0.0);
   for (var i = 0u; i < WAVE_COUNT; i++) {
-    let w = WAVES[i];
+    let w = waveShape(i);
     let phase = wavePhase(i, xz, t);
     let c = cos(phase);
     n.x -= w.x * w.w * w.z * c;
     n.z -= w.y * w.w * w.z * c;
-    n.y -= WAVE_DYNAMICS[i].y * w.w * w.z * sin(phase);
+    n.y -= waveSteepness(i) * w.w * w.z * sin(phase);
   }
   return normalize(n);
 }
@@ -502,7 +503,7 @@ struct SurfaceOut {
 @vertex
 fn vsSurface(@builtin(vertex_index) vi: u32) -> SurfaceOut {
   let xz = gridVertex(vi);
-  let d = waveDisplace(xz, R.camPos.w);
+  let d = waveDisplace(xz, R.waves.w);
   var o: SurfaceOut;
   o.rest = xz;
   o.wp = vec3f(xz.x + d.x, R.tank.w + d.y, xz.y + d.z);
@@ -519,7 +520,7 @@ fn fresnel(cosTheta: f32) -> f32 {
 
 @fragment
 fn fsSurface(in: SurfaceOut) -> @location(0) vec4f {
-  let n = waveNormal(in.rest, R.camPos.w);
+  let n = waveNormal(in.rest, R.waves.w);
   let toCam = R.camPos.xyz - in.wp;
   let dist = length(toCam);
   let v = toCam / dist;

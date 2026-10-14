@@ -127,6 +127,9 @@ describe('packRenderUniforms', () => {
     expect(out[19]).toBe(1); // light.w = frustum culling on by default
     expect(out[43]).toBe(1); // camFwd.w = sand caustics on by default
     expect(out[48]).toBe(0); // post.x = no vignette unless asked for
+    expect(Array.from(out.slice(52, 56))).toEqual([1, 1, 0, 0]); // waves: unscaled, clock at 0
+    const w = packRenderUniforms({ ...args, waves: { height: 2, scale: 0.5, clock: 12 } });
+    expect(Array.from(w.slice(52, 56))).toEqual([2, 0.5, 0, 12]);
     expect(packRenderUniforms({ ...args, vignette: 0.6 })[48]).toBeCloseTo(0.6, 6);
     expect(out[23]).toBe(0); // absorb.w = light shafts off unless asked for
     expect(packRenderUniforms({ ...args, shaftStrength: 1.5 })[23]).toBe(1.5);

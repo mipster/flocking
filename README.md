@@ -46,9 +46,11 @@ Three species, each with its own speed, force limit and flocking weights:
 
 ## Controls
 
-- **Mouse**: orbit, zoom and pan the camera (OrbitControls).
-- **Panel (top right)**: fish count (32², 64², 128²), speed multiplier, pause, tank toggle, fog, species mix and reset. Each species folder exposes every steering parameter and applies it live.
-- **Bottom left**: FPS and fish count.
+- **Mouse**: drag to orbit, wheel to zoom.
+- **Global panel (top right)**: fish count (16k to 2M), neighbor mode, samples per cell, left/right edges, tank width and depth, steering smoothing, speed, pause, camera look height, and exact medium and large fish counts. Each species folder exposes every steering parameter and applies it live.
+- **Water look**: a **preset** dropdown (Reef, Clear shallows, Deep blue, Murky bay, Stormy) sets water murkiness, light shafts, marine snow, vignette and the three wave sliders (**wave height**, **wave scale**, **wave speed**) together. Moving any of those sliders by hand switches the dropdown to "custom". Presets live in `src/webgpu/presets.js`.
+- **Bottom left**: FPS, GPU time per frame, frame time and fish count.
+- **`?debug`**: adds profiling switches (simulate, draw fish, surface, sea floor, marine snow, frustum culling, sand caustics, pixel ratio) and exposes `window.__boids` and `window.__renderer`. Add `&msaa=1` to turn multisampling off.
 
 ## How it works
 
@@ -72,20 +74,22 @@ Three species, each with its own speed, force limit and flocking weights:
 ```
 index.html, bench.html
 src/species.js               species definitions, defaults and tank size
+src/gui.js                   species parameter panels
 src/webgpu/config.js         engine tuning constants (one place)
+src/webgpu/presets.js        water-look presets (named bundles of slider values)
 src/webgpu/layout.js         uniform buffer packing with named fields
 src/webgpu/floor.js          sea floor height (JS reference + generated WGSL)
-src/gui.js                   species parameter panels
+src/webgpu/caustics.js       wave-focusing WGSL shared by sand, fish and shafts
 src/webgpu/main.js           viewer: device, GUI, camera, frame loop
 src/webgpu/GpuBoids.js       buffers, pipelines, per-frame compute passes
 src/webgpu/sim.wgsl          steering, spatial grid, boundaries
-src/webgpu/FishRenderer.js   instanced rendering, camera matrices
-src/webgpu/render.wgsl       orientation, tail wiggle, lighting, fog
-src/webgpu/fishGeometry.js   low-poly fish mesh
+src/webgpu/FishRenderer.js   passes: backdrop, floor, culled fish, snow, surface, shafts, vignette
+src/webgpu/render.wgsl       all render shaders (water, fish, floor, surface, shafts, snow)
+src/webgpu/fishGeometry.js   low-poly fish meshes (full and simple)
 src/bench.js                 benchmark runner
 ```
 
 ## Roadmap
 
-- Sea floor, absorption-based water colour, animated surface, caustics and light shafts.
-- Mouse-controlled predator or food source, and presets.
+- Mouse-controlled predator or food source.
+- Optional: baked caustic texture, bubbles, seaweed and rocks on the floor.

@@ -10,9 +10,12 @@ import {
   DEFAULT_SHAFT_STRENGTH,
   DEFAULT_SNOW_AMOUNT,
   DEFAULT_VIGNETTE,
+  DEFAULT_WAVES,
+  WAVE_SCALE_MAX,
   DEFAULT_STEERING_SMOOTHING,
   FRAMES_IN_FLIGHT,
 } from './config.js';
+import { DEFAULT_PRESET, PRESETS, PRESET_KEYS, applyPreset } from './presets.js';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
@@ -33,6 +36,10 @@ const settings = {
   shafts: DEFAULT_SHAFT_STRENGTH,
   snow: DEFAULT_SNOW_AMOUNT,
   vignette: DEFAULT_VIGNETTE,
+  waveHeight: DEFAULT_WAVES.height,
+  waveScale: DEFAULT_WAVES.scale,
+  waveSpeed: DEFAULT_WAVES.speed,
+  preset: DEFAULT_PRESET,
   lookHeight: DEFAULT_LOOK_HEIGHT,
   smoothing: DEFAULT_STEERING_SMOOTHING,
   mediumCount: DEFAULT_COUNTS.medium,
@@ -107,10 +114,33 @@ async function main() {
     });
   g.add(settings, 'speed', 0, 3, 0.05).name('speed ×');
   g.add(settings, 'paused').name('pause');
-  g.add(settings, 'murkiness', 0, 4, 0.05).name('water murkiness');
-  g.add(settings, 'shafts', 0, 3, 0.05).name('light shafts');
-  g.add(settings, 'snow', 0, 2, 0.05).name('marine snow');
-  g.add(settings, 'vignette', 0, 1, 0.05).name('vignette');
+  // water look: a preset sets all four sliders at once; touching one by hand marks the preset
+  // as "custom" so the dropdown never claims a look that no longer matches
+  const look = gui.addFolder('Water look');
+  const presetControl = look
+    .add(settings, 'preset', ['custom', ...Object.keys(PRESETS)])
+    .name('preset')
+    .onChange((name) => {
+      if (!applyPreset(settings, name)) return;
+      for (const c of look.controllers) if (c !== presetControl) c.updateDisplay();
+    });
+  const markCustom = () => {
+    settings.preset = 'custom';
+    presetControl.updateDisplay();
+  };
+  const lookSliders = {
+    murkiness: [0, 4, 'water murkiness'],
+    shafts: [0, 3, 'light shafts'],
+    snow: [0, 2, 'marine snow'],
+    vignette: [0, 1, 'vignette'],
+    waveHeight: [0.1, 3, 'wave height'],
+    waveScale: [0.4, WAVE_SCALE_MAX, 'wave scale (shorter →)'],
+    waveSpeed: [0, 3, 'wave speed'],
+  };
+  for (const key of PRESET_KEYS) {
+    const [min, max, label] = lookSliders[key];
+    look.add(settings, key, min, max, 0.05).name(label).onChange(markCustom);
+  }
   g.add(settings, 'lookHeight', -30, 40, 1).name('camera looks at height');
   g.add(settings, 'mediumCount', 0, 20000, 1).name('medium fish').onFinishChange(rebuild);
   g.add(settings, 'largeCount', 0, 2000, 1).name('large fish').onFinishChange(rebuild);
@@ -145,8 +175,11 @@ async function main() {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!drag) return;
-    renderer.yaw -= (e.clientX - drag[0]) * 0.005;
-    renderer.pitch = Math.max(-1.5, Math.min(1.5, renderer.pitch + (e.clientY - drag[1]) * 0.005));
+    renderer.yaw -= (e.clientX - drag[0]) * CAMERA.dragSensitivity;
+    renderer.pitch = Math.max(
+      -CAMERA.maxPitch,
+      Math.min(CAMERA.maxPitch, renderer.pitch + (e.clientY - drag[1]) * CAMERA.dragSensitivity)
+    );
     drag = [e.clientX, e.clientY];
   });
   canvas.addEventListener(
@@ -155,7 +188,7 @@ async function main() {
       e.preventDefault();
       renderer.dist = Math.max(
         CAMERA.minDistance,
-        Math.min(CAMERA.maxDistance, renderer.dist * Math.exp(e.deltaY * 0.001))
+        Math.min(CAMERA.maxDistance, renderer.dist * Math.exp(e.deltaY * CAMERA.zoomSensitivity))
       );
     },
     { passive: false }
@@ -185,6 +218,9 @@ async function main() {
     renderer.shaftStrength = settings.shafts;
     renderer.snowAmount = settings.snow;
     renderer.vignette = settings.vignette;
+    renderer.waveHeight = settings.waveHeight;
+    renderer.waveScale = settings.waveScale;
+    renderer.waveSpeed = settings.waveSpeed;
     renderer.targetY = settings.lookHeight;
     if (settings.simulate && !settings.paused) boids.step(dt * settings.speed);
     renderer.render(boids, now / 1000);

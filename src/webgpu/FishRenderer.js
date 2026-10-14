@@ -9,6 +9,7 @@ import {
   DEFAULT_SHAFT_STRENGTH,
   DEFAULT_SNOW_AMOUNT,
   DEFAULT_VIGNETTE,
+  DEFAULT_WAVES,
   FISH_LOD,
   FLOOR_MESH,
   LIGHT_DIRECTION,
@@ -85,6 +86,12 @@ export class FishRenderer {
     this.shaftStrength = DEFAULT_SHAFT_STRENGTH;
     this.snowAmount = DEFAULT_SNOW_AMOUNT;
     this.vignette = DEFAULT_VIGNETTE;
+    // wave sliders; the clock is advanced here so changing the speed never makes waves jump
+    this.waveHeight = DEFAULT_WAVES.height;
+    this.waveScale = DEFAULT_WAVES.scale;
+    this.waveSpeed = DEFAULT_WAVES.speed;
+    this.waveClock = 0;
+    this.lastTime = null;
     // orbit camera
     this.yaw = 0;
     this.pitch = CAMERA.startPitch;
@@ -318,9 +325,13 @@ export class FishRenderer {
   // Per-layer switches for profiling (the viewer exposes them under ?debug).
   layers = { floor: true, fish: true, surface: true, floorCaustics: true, cull: true, snow: true };
 
-  // `time` (seconds) drives the waves.
+  // `time` (seconds) is the real clock; the wave clock follows it at the wave-speed setting.
   render(boids, time) {
     const { device } = this;
+    if (this.lastTime !== null) {
+      this.waveClock += Math.min(Math.max(time - this.lastTime, 0), 0.1) * this.waveSpeed;
+    }
+    this.lastTime = time;
     if (this.boundFor !== boids) {
       this.shadeBuf?.destroy();
       this.shadeBuf = device.createBuffer({
@@ -375,7 +386,8 @@ export class FishRenderer {
       Math.cos(this.yaw) * cp * this.dist,
     ];
     // shafts are only drawn from under the water
-    const useShafts = this.shaftStrength > 0 && eye[1] < half[1] + WAVE_AMPLITUDE_TOTAL;
+    const surfaceY = half[1] + WAVE_AMPLITUDE_TOTAL * this.waveHeight;
+    const useShafts = this.shaftStrength > 0 && eye[1] < surfaceY;
     const proj = perspective((CAMERA.fovDegrees * Math.PI) / 180, aspect, CAMERA.near, CAMERA.far);
 
     // the floor mesh covers several tank widths so wrapped fish always have sand beneath them
@@ -397,8 +409,9 @@ export class FishRenderer {
         light: LIGHT_DIRECTION,
         absorption: WATER.absorption.map((a) => a * this.murkiness),
         half,
-        surfaceY: half[1] + WAVE_AMPLITUDE_TOTAL,
+        surfaceY,
         time,
+        waves: { height: this.waveHeight, scale: this.waveScale, clock: this.waveClock },
         floorCaustics: this.layers.floorCaustics,
         cull: this.layers.cull,
         shaftStrength: useShafts ? this.shaftStrength : 0,
@@ -466,7 +479,7 @@ export class FishRenderer {
       pass.drawIndirect(this.drawArgs, 16);
     }
     const snowCount = Math.round(SNOW.count * this.snowAmount);
-    if (this.layers.snow && snowCount > 0 && eye[1] < half[1] + WAVE_AMPLITUDE_TOTAL) {
+    if (this.layers.snow && snowCount > 0 && eye[1] < surfaceY) {
       pass.setPipeline(this.snowPipeline);
       pass.setBindGroup(0, this.snowBindGroup);
       pass.draw(6, snowCount);

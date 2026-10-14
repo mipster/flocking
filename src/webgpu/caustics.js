@@ -1,11 +1,26 @@
 // WGSL for sunlight focused by the wave surface, shared by the render shaders (sand, per-fish
-// lighting, light shafts). Needs the constants from wgslHeader().
+// lighting, light shafts). Needs the constants from wgslHeader() and the render uniform `R`.
 
 export const causticsWGSL = /* wgsl */ `
-// Phase of wave \`i\` at rest position \`xz\`; shared by the displacement, normal and caustics.
-fn wavePhase(i: u32, xz: vec2f, t: f32) -> f32 {
+// Wave \`i\` as the viewer's wave sliders (R.waves: height, wavenumber scale) leave it:
+// [dirX, dirZ, amplitude, wavenumber].
+fn waveShape(i: u32) -> vec4f {
   let w = WAVES[i];
-  return w.w * dot(w.xy, xz) - WAVE_DYNAMICS[i].x * t;
+  return vec4f(w.xy, w.z * R.waves.x, w.w * R.waves.y);
+}
+
+// Horizontal steepness of wave \`i\`. Dividing out the height and scale factors keeps
+// steepness * wavenumber * amplitude constant, so crests never loop however the sliders are set.
+fn waveSteepness(i: u32) -> f32 {
+  return WAVE_DYNAMICS[i].y / (R.waves.x * R.waves.y);
+}
+
+// Phase of wave \`i\` at rest position \`xz\`; shared by the displacement, normal and caustics.
+// \`t\` is the wave clock (R.waves.w), which already includes the speed slider. Deep-water waves
+// travel at sqrt(g / k), so a larger wavenumber scale slows them accordingly.
+fn wavePhase(i: u32, xz: vec2f, t: f32) -> f32 {
+  let w = waveShape(i);
+  return w.w * dot(w.xy, xz) - WAVE_DYNAMICS[i].x * sqrt(R.waves.y) * t;
 }
 
 // How much the wave surface stretches sunlight that entered at \`p\` and travelled \`depth\`
@@ -16,7 +31,7 @@ fn waveFocus(p: vec2f, depth: f32, t: f32, waves: u32) -> f32 {
   var hxz = 0.0;
   var hzz = 0.0;
   for (var i = 0u; i < waves; i++) {
-    let w = WAVES[i];
+    let w = waveShape(i);
     let a = w.z * w.w * w.w * sin(wavePhase(i, p, t));
     hxx -= a * w.x * w.x;
     hxz -= a * w.x * w.y;
@@ -36,7 +51,7 @@ fn causticFocus(xz: vec2f, depth: f32, t: f32) -> f32 {
   var p = xz - SUN_TRAVEL * depth;
   var slope = vec2f(0.0);
   for (var i = 0u; i < WAVE_MESH_COUNT; i++) {
-    let w = WAVES[i];
+    let w = waveShape(i);
     slope += w.xy * (w.z * w.w * cos(wavePhase(i, p, t)));
   }
   p -= CAUSTIC_BEND * depth * slope;

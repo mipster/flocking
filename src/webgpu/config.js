@@ -52,6 +52,9 @@ export const CAMERA = {
   startPitch: -0.1, // camera starts below the surface, looking up through the flock at it
   minDistance: 20,
   maxDistance: 700,
+  maxPitch: 1.5, // radians; stops just short of straight up or down
+  dragSensitivity: 0.005, // radians per pixel dragged
+  zoomSensitivity: 0.001, // log-distance per wheel delta unit
 };
 
 export const LIGHT_DIRECTION = [0.3, 1.0, 0.4]; // toward the sun, normalised on upload
@@ -181,6 +184,16 @@ export const HAZE = { scale: 55, drift: 1.5, amount: 0.9 };
  */
 export const VIGNETTE = { inner: 0.4, outer: 1.0 };
 export const DEFAULT_VIGNETTE = 0.5;
+
+/**
+ * Viewer-controlled scaling of the wave table (all three are 1 for the waves as listed in WAVES):
+ * - height multiplies every amplitude (and so the mean water level above the tank top)
+ * - scale multiplies every wavenumber (above 1 = shorter, choppier waves; keep it under
+ *   WAVE_SCALE_MAX or the finest waves alias on the surface mesh)
+ * - speed multiplies how fast the waves travel
+ */
+export const DEFAULT_WAVES = { height: 1, scale: 1, speed: 1 };
+export const WAVE_SCALE_MAX = 1.5;
 
 /**
  * Marine snow: drifting specks that give the water scale and depth. Each speck's position is a

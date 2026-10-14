@@ -104,8 +104,8 @@ export function packRenderSpecies(species) {
   return out;
 }
 
-/** Floats in the render `RU` uniform (mat4 + 9 x vec4f). */
-export const RENDER_UNIFORM_FLOATS = 52;
+/** Floats in the render `RU` uniform (mat4 + 10 x vec4f). */
+export const RENDER_UNIFORM_FLOATS = 56;
 
 /**
  * render.wgsl `RU`:
@@ -119,6 +119,7 @@ export const RENDER_UNIFORM_FLOATS = 52;
  *   camFwd    = (forward xyz, sand caustics on = 1 / off = 0)
  *   camPos    = (camera world position xyz, time in seconds)
  *   post      = (vignette strength 0..1, 0, 0, 0)
+ *   waves     = (wave height scale, wavenumber scale, 0, wave clock in seconds)
  */
 export function packRenderUniforms({
   viewProj,
@@ -133,6 +134,7 @@ export function packRenderUniforms({
   cull = true,
   shaftStrength = 0,
   vignette = 0,
+  waves = { height: 1, scale: 1, clock: 0 },
 }) {
   const out = new Float32Array(RENDER_UNIFORM_FLOATS);
   const l = Math.hypot(...light);
@@ -146,5 +148,6 @@ export function packRenderUniforms({
   out.set([...camera.forward, floorCaustics ? 1 : 0], 40);
   out.set([...camera.position, time], 44);
   out.set([vignette, 0, 0, 0], 48);
+  out.set([waves.height, waves.scale, 0, waves.clock], 52);
   return out;
 }

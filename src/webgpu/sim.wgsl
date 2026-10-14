@@ -204,7 +204,7 @@ fn cellOfPos(p: vec3f) -> vec3i {
 
 // ---- brute force -----------------------------------------------------------
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn snapshot(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i >= u32(P.a.z)) { return; }
@@ -212,10 +212,10 @@ fn snapshot(@builtin(global_invocation_id) gid: vec3u) {
   svel[i] = vel[i];
 }
 
-var<workgroup> tp: array<vec4f, 64>;
-var<workgroup> tv: array<vec4f, 64>;
+var<workgroup> tp: array<vec4f, WORKGROUP_SIZE>;
+var<workgroup> tv: array<vec4f, WORKGROUP_SIZE>;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn steerBrute(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_index) lid: u32) {
   let n = u32(P.a.z);
   let i = gid.x;
@@ -223,9 +223,9 @@ fn steerBrute(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocati
   var m: Me;
   if (valid) { m = loadMe(i); }
   var acc: Acc;
-  let tiles = (n + 63u) / 64u;
+  let tiles = (n + WORKGROUP_SIZE - 1u) / WORKGROUP_SIZE;
   for (var t = 0u; t < tiles; t++) {
-    let j = t * 64u + lid;
+    let j = t * WORKGROUP_SIZE + lid;
     if (j < n) {
       tp[lid] = spos[j];
       tv[lid] = svel[j];
@@ -235,7 +235,7 @@ fn steerBrute(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocati
     }
     workgroupBarrier();
     if (valid) {
-      for (var k = 0u; k < 64u; k++) {
+      for (var k = 0u; k < WORKGROUP_SIZE; k++) {
         consider(&acc, m, tp[k], tv[k].xyz, 1.0);
       }
     }
@@ -246,13 +246,13 @@ fn steerBrute(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocati
 
 // ---- spatial grid ----------------------------------------------------------
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn clearCells(@builtin(global_invocation_id) gid: vec3u) {
   let keys = u32(P.grid.y * P.grid.z * P.grid.w) * 3u;
   if (gid.x < keys) { atomicStore(&cellCount[gid.x], 0u); }
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn countCells(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i >= u32(P.a.z)) { return; }
@@ -275,7 +275,7 @@ fn scanCells() {
   cellStart[keys] = sum;
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn scatter(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i >= u32(P.a.z)) { return; }
@@ -285,7 +285,7 @@ fn scatter(@builtin(global_invocation_id) gid: vec3u) {
   svel[dst] = vel[i];
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn steerGrid(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i >= u32(P.a.z)) { return; }
