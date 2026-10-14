@@ -7,10 +7,12 @@ import {
   CAMERA,
   DEFAULT_MURKINESS,
   DEFAULT_SHAFT_STRENGTH,
+  DEFAULT_SNOW_AMOUNT,
   FISH_LOD,
   FLOOR_MESH,
   LIGHT_DIRECTION,
   SHAFTS,
+  SNOW,
   SPECIES_COUNT,
   WORKGROUP_SIZE,
   WATER,
@@ -80,6 +82,7 @@ export class FishRenderer {
     this.species = species;
     this.murkiness = DEFAULT_MURKINESS;
     this.shaftStrength = DEFAULT_SHAFT_STRENGTH;
+    this.snowAmount = DEFAULT_SNOW_AMOUNT;
     // orbit camera
     this.yaw = 0;
     this.pitch = CAMERA.startPitch;
@@ -173,6 +176,23 @@ export class FishRenderer {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
       multisample: { count: this.samples },
+    });
+    // marine snow: tiny soft quads, premultiplied alpha, depth-tested but not written
+    this.snowPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsSnow' },
+      fragment: {
+        module,
+        entryPoint: 'fsSnow',
+        targets: [{ format: this.format, blend: premultiplied }],
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
+      multisample: { count: this.samples },
+    });
+    this.snowBindGroup = device.createBindGroup({
+      layout: this.snowPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
     });
     this.surfaceBindGroup = device.createBindGroup({
       layout: this.surfacePipeline.getBindGroupLayout(0),
@@ -275,7 +295,7 @@ export class FishRenderer {
   }
 
   // Per-layer switches for profiling (the viewer exposes them under ?debug).
-  layers = { floor: true, fish: true, surface: true, floorCaustics: true, cull: true };
+  layers = { floor: true, fish: true, surface: true, floorCaustics: true, cull: true, snow: true };
 
   // `time` (seconds) drives the waves.
   render(boids, time) {
@@ -422,6 +442,12 @@ export class FishRenderer {
       pass.setBindGroup(0, this.drawGroups.full);
       pass.setVertexBuffer(0, this.meshes.full.vbo);
       pass.drawIndirect(this.drawArgs, 16);
+    }
+    const snowCount = Math.round(SNOW.count * this.snowAmount);
+    if (this.layers.snow && snowCount > 0 && eye[1] < half[1] + WAVE_AMPLITUDE_TOTAL) {
+      pass.setPipeline(this.snowPipeline);
+      pass.setBindGroup(0, this.snowBindGroup);
+      pass.draw(6, snowCount);
     }
     if (this.layers.surface) {
       pass.setPipeline(this.surfacePipeline);

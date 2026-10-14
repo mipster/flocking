@@ -166,6 +166,40 @@ export const SHAFTS = {
 export const DEFAULT_SHAFT_STRENGTH = 1;
 
 /**
+ * Patchy haze: the density the shafts scatter varies slowly in 3D, so the water is cloudy in
+ * places and clear in others and beams look uneven.
+ * - scale: size of a patch in world units
+ * - drift: how fast the patches move sideways, in world units per second
+ * - amount: 0 = uniform, 1 = patches range from clear to twice the average
+ */
+export const HAZE = { scale: 55, drift: 1.5, amount: 0.9 };
+
+/**
+ * Marine snow: drifting specks that give the water scale and depth. Each speck's position is a
+ * pure function of its index and the time (no simulation), wrapped inside a box that follows the
+ * camera, and lit like everything else, brighter where it crosses a beam.
+ * - count: specks at slider value 1
+ * - box: edge of the camera-following cube, in world units
+ * - size: speck radius in world units; minAngle keeps far specks at least this many radians wide
+ * - fall: average sinking speed in world units per second
+ * - sway: how far a speck wanders sideways around its path (world units, bounded)
+ * - bob: up-and-down wave motion near the surface; fades with depth
+ * - brightness / beam: base brightness, and how much a focused beam adds
+ */
+export const SNOW = {
+  count: 24000,
+  box: 170,
+  size: 0.11,
+  minAngle: 0.0011,
+  fall: 0.5,
+  sway: 2.5,
+  bob: 0.6,
+  brightness: 1.3,
+  beam: 1.2,
+};
+export const DEFAULT_SNOW_AMOUNT = 1;
+
+/**
  * Sun glint on fish scales: a tight specular flash from the flanks, scaled per species by its
  * `glint` setting. It rides on the fish's caustic-lit sunlight, so it pulses with the caustics.
  */
@@ -200,6 +234,17 @@ const CAUSTIC_FADE = ${CAUSTICS.fade};
 const CAUSTIC_BASE = ${CAUSTICS.base};
 const CAUSTIC_GAIN = ${CAUSTICS.gain};
 const CAUSTIC_MIN_DET = ${CAUSTICS.minDeterminant};
+const HAZE_SCALE = ${HAZE.scale};
+const HAZE_DRIFT = ${HAZE.drift};
+const HAZE_AMOUNT = ${HAZE.amount};
+const SNOW_BOX = ${SNOW.box};
+const SNOW_SIZE = ${SNOW.size};
+const SNOW_MIN_ANGLE = ${SNOW.minAngle};
+const SNOW_FALL = ${SNOW.fall};
+const SNOW_SWAY = ${SNOW.sway};
+const SNOW_BOB = ${SNOW.bob};
+const SNOW_BRIGHTNESS = ${SNOW.brightness};
+const SNOW_BEAM = ${SNOW.beam};
 const SHAFT_STEPS = ${SHAFTS.steps};
 const SHAFT_WAVES = ${SHAFTS.waves}u;
 const SHAFT_RANGE = ${SHAFTS.range};

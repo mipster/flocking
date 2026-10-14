@@ -254,6 +254,30 @@ fn interleavedNoise(p: vec2f) -> f32 {
   return fract(52.9829189 * fract(dot(p, vec2f(0.06711056, 0.00583715))));
 }
 
+fn hash3(p: vec3f) -> f32 {
+  return fract(sin(dot(p, vec3f(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+// smooth value noise in 3D, 0..1
+fn noise3(p: vec3f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  let x0 = mix(hash3(i), hash3(i + vec3f(1.0, 0.0, 0.0)), u.x);
+  let x1 = mix(hash3(i + vec3f(0.0, 1.0, 0.0)), hash3(i + vec3f(1.0, 1.0, 0.0)), u.x);
+  let x2 = mix(hash3(i + vec3f(0.0, 0.0, 1.0)), hash3(i + vec3f(1.0, 0.0, 1.0)), u.x);
+  let x3 = mix(hash3(i + vec3f(0.0, 1.0, 1.0)), hash3(i + vec3f(1.0, 1.0, 1.0)), u.x);
+  return mix(mix(x0, x1, u.y), mix(x2, x3, u.y), u.z);
+}
+
+// Cloudiness of the water at a point: 1 on average, drifting slowly sideways, with a second
+// finer layer so patches have ragged edges.
+fn hazePatch(p: vec3f, t: f32) -> f32 {
+  let q = (p + vec3f(t * HAZE_DRIFT, 0.0, t * HAZE_DRIFT * 0.6)) / HAZE_SCALE;
+  let n = noise3(q) * 0.7 + noise3(q * 2.7 + vec3f(5.2, 1.3, 8.1)) * 0.3;
+  return max(1.0 + HAZE_AMOUNT * (n * 2.0 - 1.0) * 1.6, 0.05);
+}
+
 // Single-scattered sunlight along each view ray, from the camera up to the range limit, the water
 // surface, or the sea floor (whichever comes first; fish are too small to occlude beams, and
 // ignoring them avoids holes where the depth buffer jumps between fish and background). Runs at
@@ -276,7 +300,7 @@ fn fsShaft(in: BgOut) -> @location(0) vec4f {
     if (p.y < floorY(p.xz, R.tank.xyz)) { break; }
     let depth = max(R.tank.w - p.y, 0.0);
     let focus = shaftFocus(p.xz, depth, R.camPos.w);
-    let density = SHAFT_BASE + SHAFT_GAIN * max(focus - 1.0, 0.0);
+    let density = (SHAFT_BASE + SHAFT_GAIN * max(focus - 1.0, 0.0)) * hazePatch(p, R.camPos.w);
     // sunlight reaching the point, then the part of it that survives the trip to the eye
     sum += exp(-R.absorb.xyz * (depth + t * rayLen)) * density;
   }
@@ -295,6 +319,79 @@ fn fsShaft(in: BgOut) -> @location(0) vec4f {
 fn fsComposite(in: BgOut) -> @location(0) vec4f {
   let uv = vec2f(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
   return textureSampleLevel(shaftTex, shaftSampler, uv, 0.0);
+}
+
+// ---- marine snow ----------------------------------------------------------------
+
+fn snowHash(i: u32, k: f32) -> f32 {
+  return fract(sin((f32(i) + k * 7919.0) * 12.9898) * 43758.5453);
+}
+
+struct SnowOut {
+  @builtin(position) clip: vec4f,
+  @location(0) uv: vec2f,
+  @location(1) col: vec3f,
+  @location(2) alpha: f32,
+};
+
+// One camera-facing quad per speck (6 vertices per instance). Its place is a function of its index
+// and the time only: a fixed point in the world that sinks and sways, wrapped into a box around
+// the camera so there are always specks nearby however far the camera travels.
+@vertex
+fn vsSnow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SnowOut {
+  let t = R.camPos.w;
+  let seed = vec3f(snowHash(ii, 0.0), snowHash(ii, 1.0), snowHash(ii, 2.0));
+  let speed = SNOW_FALL * (0.4 + 1.2 * snowHash(ii, 3.0));
+  let cam = R.camPos.xyz;
+  // steady sinking, then a bounded wander in all three axes (each speck has its own phase and
+  // rate); the wrap below only needs the unbounded part, which is the sinking
+  var p = seed * SNOW_BOX + vec3f(0.0, -speed * t, 0.0);
+  p = cam + (fract((p - cam) / SNOW_BOX + 0.5) - 0.5) * SNOW_BOX;
+  let phase = seed * 6.2831853 * 7.0;
+  let rate = 0.6 + 0.8 * vec3f(snowHash(ii, 6.0), snowHash(ii, 7.0), snowHash(ii, 8.0));
+  p += SNOW_SWAY * sin(t * 0.17 * rate + phase) * vec3f(1.0, 0.0, 1.0);
+  // waves move water in circles that shrink with depth, so specks near the surface also bob
+  let bobDepth = max(R.tank.w - p.y, 0.0);
+  p.y += SNOW_BOB * exp(-bobDepth * 0.05) * sin(t * 0.9 * rate.y + phase.y);
+
+  var o: SnowOut;
+  // specks above the water or inside the sand are not drawn
+  if (p.y > R.tank.w || p.y < floorY(p.xz, R.tank.xyz)) {
+    o.clip = vec4f(0.0, 0.0, -2.0, 1.0);
+    o.uv = vec2f(0.0);
+    o.col = vec3f(0.0);
+    o.alpha = 0.0;
+    return o;
+  }
+
+  var corners = array<vec2f, 6>(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+    vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+  let c = corners[vi];
+  let dist = distance(p, cam);
+  let size = SNOW_SIZE * (0.5 + snowHash(ii, 4.0));
+  // far specks would shrink below a pixel and shimmer, so keep a minimum angular size and give the
+  // lost area back as lower opacity
+  let wide = max(size, SNOW_MIN_ANGLE * dist);
+  let world = p + (R.camRight.xyz * c.x + R.camUp.xyz * c.y) * wide;
+
+  let dl = depthLight(p.y);
+  let depth = max(R.tank.w - p.y, 0.0);
+  let focus = shaftFocus(p.xz, depth, t);
+  let beam = 1.0 + SNOW_BEAM * clamp(focus - 1.0, 0.0, 2.0);
+  let base = vec3f(0.85, 0.92, 0.95) * SNOW_BRIGHTNESS * (0.4 + 0.6 * snowHash(ii, 5.0)) * beam;
+
+  o.clip = R.viewProj * vec4f(world, 1.0);
+  o.uv = c;
+  o.col = underwater(base, dl.sun, dl.veil, dist);
+  o.alpha = 0.85 * sqrt(size / wide);
+  return o;
+}
+
+@fragment
+fn fsSnow(in: SnowOut) -> @location(0) vec4f {
+  let a = smoothstep(1.0, 0.25, length(in.uv)) * in.alpha;
+  return vec4f(in.col * a, a);
 }
 
 // ---- backdrop -----------------------------------------------------------------
