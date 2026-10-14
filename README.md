@@ -1,6 +1,6 @@
 # GPU Fish Flocking
 
-A 3D fish-flocking demo running entirely on the GPU with WebGPU compute shaders. It is a browser rebuild of the flocking demo from *The Nature of Code*, extended with several fish species, and scales from thousands to a million fish using a spatial grid.
+A 3D fish-flocking demo running entirely on the GPU with WebGPU compute shaders. It is a browser rebuild of the flocking demo from _The Nature of Code_, extended with several fish species, and scales from thousands to a million fish using a spatial grid.
 
 ## Run it
 
@@ -16,15 +16,25 @@ Requires a browser with WebGPU (Chrome, Edge or Brave 113+ on macOS, Windows and
 - **Viewer** (`/`): the flock. Fish count (16k to 2M), neighbor mode (spatial grid or brute force), samples per cell, side edges (wrap around or soft walls), tank width and depth, and exact medium and large fish counts are in the panel.
 - **Benchmark** (`/bench.html`): times simulation steps for WebGPU brute force and the grid at 4k to 1M fish. Keep the tab visible while it runs, because a hidden tab can skip GPU work and give bogus numbers.
 
+## Development
+
+```bash
+npm run check    # lint, format check, unit tests, production build (same as CI)
+npm run format   # apply Prettier
+```
+
+Conventions and the module map are in [CLAUDE.md](CLAUDE.md). Open the viewer with `?debug` to expose
+the simulation as `window.__boids` for console inspection.
+
 ## Behavior
 
 Three species, each with its own speed, force limit and flocking weights:
 
-| Species | Behavior |
-| --- | --- |
-| Small | Fast, schools tightly in large groups, flees larger fish |
-| Medium | Looser groups, flees large fish |
-| Large | Slow, wanders, mildly drawn toward smaller fish |
+| Species | Behavior                                                 |
+| ------- | -------------------------------------------------------- |
+| Small   | Fast, schools tightly in large groups, flees larger fish |
+| Medium  | Looser groups, flees large fish                          |
+| Large   | Slow, wanders, mildly drawn toward smaller fish          |
 
 - **Separation** applies to all neighbors.
 - **Alignment and cohesion** only count fish of the same species.
@@ -50,6 +60,9 @@ Three species, each with its own speed, force limit and flocking weights:
 ```
 index.html, bench.html
 src/species.js               species definitions, defaults and tank size
+src/webgpu/config.js         engine tuning constants (one place)
+src/webgpu/layout.js         uniform buffer packing with named fields
+src/webgpu/floor.js          sea floor height (JS reference + generated WGSL)
 src/gui.js                   species parameter panels
 src/webgpu/main.js           viewer: device, GUI, camera, frame loop
 src/webgpu/GpuBoids.js       buffers, pipelines, per-frame compute passes
