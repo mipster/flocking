@@ -20,8 +20,23 @@ export const CLEARANCE = { base: 0.3, belly: 0.2, fin: 0.32 };
 /** Default steering low-pass time constant in seconds (0 = off). Larger = calmer but slower to react. */
 export const DEFAULT_STEERING_SMOOTHING = 0.1;
 
+/**
+ * Frames the viewer may have queued on the GPU at once. 1 makes CPU and GPU take turns; 2 lets the
+ * CPU prepare the next frame while the GPU draws this one. More only adds input lag.
+ */
+export const FRAMES_IN_FLIGHT = 2;
+
 /** Species count; the shaders index uniform arrays by species id. */
 export const SPECIES_COUNT = 3;
+
+/**
+ * Fish are stored in species order, so the first `simpleSpecies` species (the small ones, which
+ * are tiny on screen and make up nearly all the fish) are drawn with the light mesh.
+ */
+export const FISH_LOD = { simpleSpecies: 1 };
+
+/** Radius of a sphere around a fish, in body lengths, used to cull fish outside the view. */
+export const FISH_BOUNDING_RADIUS = 0.75;
 
 /** Fish tail motion (fraction of body length; radians per body length). */
 export const TAIL = { amplitude: 0.14, wavenumber: 7.0 };
@@ -139,6 +154,9 @@ export const FLOOR_MESH = { tiles: 3, spacing: 3, maxCells: 500 };
 export function wgslHeader() {
   const table = waveTable();
   return `
+const WORKGROUP_SIZE = ${WORKGROUP_SIZE}u;
+const SIMPLE_SPECIES = ${FISH_LOD.simpleSpecies}u;
+const FISH_RADIUS = ${FISH_BOUNDING_RADIUS};
 const TAIL_AMP = ${TAIL.amplitude};
 const TAIL_K = ${TAIL.wavenumber};
 const DEEP_FADE = ${WATER.deepFade};
@@ -148,7 +166,6 @@ const CLEARANCE_BELLY = ${CLEARANCE.belly};
 const CLEARANCE_FIN = ${CLEARANCE.fin};
 const WAVE_COUNT = ${WAVE_TOTAL}u;
 const WAVE_MESH_COUNT = ${WAVES.length}u;
-const WAVE_AMPLITUDE_TOTAL = ${WAVE_AMPLITUDE_TOTAL};
 const GLINT_SHARPNESS = ${GLINT.sharpness};
 const GLINT_COLOR = vec3f(${GLINT.color.join(', ')});
 const CAUSTIC_BEND = ${CAUSTICS.bend};

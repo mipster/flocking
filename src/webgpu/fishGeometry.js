@@ -1,17 +1,28 @@
 // Low-poly fish, length 1 along local +x (head at +0.5), y up, z side.
-// Flat shaded, ~70 triangles. Returns interleaved [px, py, pz, nx, ny, nz] per vertex.
-export function buildFishVertices() {
-  const SEG = 6;
-  const tris = [];
+// Flat shaded. Returns interleaved [px, py, pz, nx, ny, nz] per vertex.
+// 'full' is ~70 triangles; 'simple' is ~20 for fish that cover only a few pixels.
 
-  // [x, half-height, half-width]
-  const stations = [
+// [x, half-height, half-width] along the body
+const STATIONS = {
+  full: [
     [0.42, 0.06, 0.05],
     [0.25, 0.14, 0.09],
     [0.0, 0.18, 0.11],
     [-0.2, 0.13, 0.08],
     [-0.38, 0.05, 0.035],
-  ];
+  ],
+  simple: [
+    [0.3, 0.1, 0.07],
+    [0.0, 0.18, 0.11],
+    [-0.3, 0.07, 0.05],
+  ],
+};
+const SEGMENTS = { full: 6, simple: 3 };
+
+export function buildFishVertices(detail = 'full') {
+  const SEG = SEGMENTS[detail];
+  const stations = STATIONS[detail];
+  const tris = [];
   const rings = stations.map(([x, rh, rw]) =>
     Array.from({ length: SEG }, (_, k) => {
       const a = (k / SEG) * Math.PI * 2;

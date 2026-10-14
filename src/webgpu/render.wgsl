@@ -6,7 +6,7 @@ struct RU {
   floorGrid: vec4f, // cols, rows, world span x, world span z
   camRight: vec4f,  // xyz, a = tan(fov/2) * aspect
   camUp: vec4f,     // xyz, a = tan(fov/2)
-  camFwd: vec4f,    // xyz
+  camFwd: vec4f,    // xyz, a = sand caustics on (1) / off (0)
   camPos: vec4f,    // xyz = camera world position, a = time in seconds
 };
 
@@ -15,8 +15,16 @@ struct RU {
 @group(0) @binding(2) var<storage, read> vel: array<vec4f>;
 // per species: [scale, glint, 0, 0], [r, g, b, 0]
 @group(0) @binding(3) var<uniform> SP: array<vec4f, 6>;
-// per fish: xyz = smoothed steering force (unused here), w = caustic light multiplier at the fish
-@group(0) @binding(4) var<storage, read> fishState: array<vec4f>;
+// per fish, two vec4s written by fishShade each frame: [sun rgb, colour hash] and [veil rgb, 0]
+@group(0) @binding(4) var<storage, read> shade: array<vec4f>;
+// indices of the fish that survived culling, for this draw (simple or full mesh)
+@group(0) @binding(6) var<storage, read> visible: array<u32>;
+// fishShade (compute) only: writable views of the same data, bound with `pos`, SP and the uniforms
+@group(0) @binding(5) var<storage, read_write> shadeOut: array<vec4f>;
+@group(0) @binding(7) var<storage, read_write> visibleSimpleOut: array<u32>;
+@group(0) @binding(8) var<storage, read_write> visibleFullOut: array<u32>;
+// two indirect draw argument blocks (vertexCount, instanceCount, firstVertex, firstInstance)
+@group(0) @binding(9) var<storage, read_write> drawArgs: array<atomic<u32>>;
 
 struct VOut {
   @builtin(position) clip: vec4f,
@@ -52,10 +60,51 @@ fn underwater(col: vec3f, sun: vec3f, veil: vec3f, dist: f32) -> vec3f {
   return col * sun * transmit + veil * (vec3f(1.0) - transmit);
 }
 
+// Is a sphere (centre, radius) at least partly inside the view frustum? Planes come straight from
+// the rows of viewProj (WebGPU clip space: -w <= x,y <= w, 0 <= z <= w).
+fn inFrustum(c: vec3f, r: f32) -> bool {
+  let m = R.viewProj;
+  let r0 = vec4f(m[0][0], m[1][0], m[2][0], m[3][0]);
+  let r1 = vec4f(m[0][1], m[1][1], m[2][1], m[3][1]);
+  let r2 = vec4f(m[0][2], m[1][2], m[2][2], m[3][2]);
+  let r3 = vec4f(m[0][3], m[1][3], m[2][3], m[3][3]);
+  var planes = array<vec4f, 6>(r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2);
+  for (var k = 0; k < 6; k++) {
+    let pl = planes[k];
+    if (dot(pl.xyz, c) + pl.w < -r * length(pl.xyz)) { return false; }
+  }
+  return true;
+}
+
+// Per-fish work, once per fish instead of once per vertex: cull fish outside the view (appending
+// the survivors to the list for their mesh), then compute the depth-attenuated sunlight with
+// caustic focus, the veiling haze and a random colour tint. A fish is a few units across, so its
+// centre depth stands in for every vertex.
+@compute @workgroup_size(WORKGROUP_SIZE)
+fn fishShade(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= arrayLength(&pos)) { return; }
+  let p4 = pos[i];
+  let p = p4.xyz;
+  let sp = u32(p4.w + 0.5);
+  if (R.light.w > 0.5 && !inFrustum(p, SP[sp * 2u].x * FISH_RADIUS)) { return; }
+  if (sp < SIMPLE_SPECIES) {
+    visibleSimpleOut[atomicAdd(&drawArgs[1], 1u)] = i;
+  } else {
+    visibleFullOut[atomicAdd(&drawArgs[5], 1u)] = i;
+  }
+  let dl = depthLight(p.y);
+  let focus = causticLight(p.xz, max(R.tank.w - p.y, 0.0), R.camPos.w);
+  let tint = fract(sin(f32(i) * 12.9898) * 43758.5453);
+  shadeOut[i * 2u] = vec4f(dl.sun * focus, tint);
+  shadeOut[i * 2u + 1u] = vec4f(dl.veil, 0.0);
+}
+
 @vertex
 fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) ii: u32) -> VOut {
-  let pw = pos[ii];
-  let vw = vel[ii];
+  let fi = visible[ii];
+  let pw = pos[fi];
+  let vw = vel[fi];
   let sp = u32(pw.w + 0.5);
   let scale = SP[sp * 2u].x;
 
@@ -71,16 +120,15 @@ fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) ii:
 
   let world = pw.xyz + (fwd * l.x + up * l.y + side * l.z) * scale;
 
-  let h = fract(sin(f32(ii) * 12.9898) * 43758.5453);
+  let s0 = shade[fi * 2u];
   var o: VOut;
   o.clip = R.viewProj * vec4f(world, 1.0);
   o.nrm = fwd * n.x + up * n.y + side * n.z;
-  o.col = SP[sp * 2u + 1u].rgb * (0.85 + 0.3 * h);
+  o.col = SP[sp * 2u + 1u].rgb * (0.85 + 0.3 * s0.w);
   o.localY = p.y;
   o.dist = distance(world, R.camPos.xyz);
-  let dl = depthLight(world.y);
-  o.sun = dl.sun * fishState[ii].w;
-  o.veil = dl.veil;
+  o.sun = s0.rgb;
+  o.veil = shade[fi * 2u + 1u].rgb;
   o.worldPos = world;
   o.glint = SP[sp * 2u].y;
   return o;
@@ -160,6 +208,11 @@ fn vnoise(p: vec2f) -> f32 {
     u.y);
 }
 
+fn floorCaustic(wp: vec3f) -> f32 {
+  if (R.camFwd.w < 0.5) { return 1.0; }
+  return causticLight(wp.xz, max(R.tank.w - wp.y, 0.0), R.camPos.w);
+}
+
 @fragment
 fn fsFloor(in: FloorOut) -> @location(0) vec4f {
   let half = R.tank.xyz;
@@ -189,7 +242,7 @@ fn fsFloor(in: FloorOut) -> @location(0) vec4f {
 
   let lambert = max(dot(n, R.light.xyz), 0.0);
   let col = sand * (0.22 + 0.9 * lambert);
-  return vec4f(underwater(col, in.sun * causticLight(in.wp.xz, max(R.tank.w - in.wp.y, 0.0), R.camPos.w), in.veil, in.dist), 1.0);
+  return vec4f(underwater(col, in.sun * floorCaustic(in.wp), in.veil, in.dist), 1.0);
 }
 
 // ---- backdrop -----------------------------------------------------------------

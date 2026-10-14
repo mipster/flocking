@@ -16,6 +16,14 @@ describe('buildFishVertices', () => {
     expect(tris).toBeLessThan(120);
   });
 
+  it('has a much lighter simple variant that spans the same length', () => {
+    const simple = buildFishVertices('simple');
+    expect(simple.length / 18).toBeLessThan(vertexCount / 3 / 2);
+    let max = -Infinity;
+    for (let i = 0; i < simple.length / 6; i++) max = Math.max(max, simple[i * 6]);
+    expect(max).toBeCloseTo(0.5, 5);
+  });
+
   it('has finite values and unit normals', () => {
     for (let i = 0; i < vertexCount; i++) {
       const o = i * 6;

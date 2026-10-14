@@ -11,7 +11,7 @@ export const SIM_PARAMS_FLOATS = 16;
  *   a      = (delta, time, count, maxPerCell)
  *   bounds = (half.x, half.y, half.z, wallMargin)
  *   grid   = (cellSize, nx, ny, nz)
- *   flags  = (wrap, steering blend per step, wave time in seconds, 0)
+ *   flags  = (wrap, steering blend per step, 0, 0)
  */
 export function packSimParams({
   dt,
@@ -24,7 +24,6 @@ export function packSimParams({
   dims,
   wrap,
   smoothing,
-  waveTime,
 }) {
   // exponential low-pass: fraction of the new force blended in each step (1 = smoothing off)
   const blend = smoothing > 0 ? 1 - Math.exp(-dt / smoothing) : 1;
@@ -43,7 +42,7 @@ export function packSimParams({
     dims[2],
     wrap ? 1 : 0,
     blend,
-    waveTime,
+    0,
     0,
   ]);
 }
@@ -111,26 +110,37 @@ export const RENDER_UNIFORM_FLOATS = 48;
 /**
  * render.wgsl `RU`:
  *   viewProj  : mat4x4f (column-major)
- *   light     = (direction toward the sun xyz, 0)
+ *   light     = (direction toward the sun xyz, frustum culling on = 1 / off = 0)
  *   absorb    = (extinction rgb per unit, 0)
  *   tank      = (half.x, half.y, half.z, mean water surface height)
  *   floorGrid = (cols, rows, world span x, world span z)
  *   camRight  = (right xyz, tan(fov/2) * aspect)
  *   camUp     = (up xyz, tan(fov/2))
- *   camFwd    = (forward xyz, 0)
+ *   camFwd    = (forward xyz, sand caustics on = 1 / off = 0)
  *   camPos    = (camera world position xyz, time in seconds)
  */
-export function packRenderUniforms({ viewProj, light, absorption, half, surfaceY, floorGrid, time, camera }) {
+export function packRenderUniforms({
+  viewProj,
+  light,
+  absorption,
+  half,
+  surfaceY,
+  floorGrid,
+  time,
+  camera,
+  floorCaustics = true,
+  cull = true,
+}) {
   const out = new Float32Array(RENDER_UNIFORM_FLOATS);
   const l = Math.hypot(...light);
   out.set(viewProj, 0);
-  out.set([light[0] / l, light[1] / l, light[2] / l, 0], 16);
+  out.set([light[0] / l, light[1] / l, light[2] / l, cull ? 1 : 0], 16);
   out.set([...absorption, 0], 20);
   out.set([half[0], half[1], half[2], surfaceY], 24);
   out.set(floorGrid, 28);
   out.set([...camera.right, camera.tanHalfX], 32);
   out.set([...camera.up, camera.tanHalfY], 36);
-  out.set([...camera.forward, 0], 40);
+  out.set([...camera.forward, floorCaustics ? 1 : 0], 40);
   out.set([...camera.position, time], 44);
   return out;
 }

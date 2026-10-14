@@ -55,10 +55,12 @@ Three species, each with its own speed, force limit and flocking weights:
 - Position and velocity live in GPU storage buffers (one entry per fish). Each frame runs a few compute passes, then draws one instanced low-poly fish mesh.
 - **Spatial grid**: fish are counting-sorted into (cell, species) buckets each frame, and each fish scans only nearby cells, taking a capped number of samples per bucket. Brute force (tiled through workgroup memory) is available for comparison.
 - **Boundaries**: the floor, surface, near and far walls are hard barriers. The left and right edges either wrap around (same direction and velocity, neighbors found across the seam) or are soft walls.
+- Fish outside the view are culled by a compute pass that builds the draw lists, and the draws are indirect. The viewer keeps two frames in flight so CPU and GPU overlap.
+- Small fish use a ~20-triangle mesh and the larger species a ~70-triangle one (`FISH_LOD` in `config.js`), and per-fish water lighting is computed once per fish rather than per vertex. Open the viewer with `?debug` for per-layer profiling switches, and add `&msaa=1` to turn multisampling off.
 - The fish vertex shader builds an orientation basis from the velocity and bends the tail with the swim phase.
 - **Water**: Beer-Lambert absorption per colour channel (red goes first) dims sunlight with depth and tints distant objects, with veiling light filling in, plus a gradient backdrop with a sun glow. The **water murkiness** slider scales it.
 - **Surface**: Gerstner waves, drawn translucent. From above you see through it with a Fresnel sky and sun reflection; from below you see the sky through Snell's window, and a mirror of the water beyond the critical angle. **camera looks at height** tilts the view up at it.
-- **Caustics**: sunlight focused by the waves (the mesh waves plus fine ripples too short to mesh) is analytic per pixel: the surface acts as a lens, and light at a point is `1 / |det(I + bend * depth * Hessian(height))|`. It dapples the sand and, evaluated once per fish in the simulation pass, the fish; it washes out with depth.
+- **Caustics**: sunlight focused by the waves (the mesh waves plus fine ripples too short to mesh) is analytic per pixel: the surface acts as a lens, and light at a point is `1 / |det(I + bend * depth * Hessian(height))|`. It dapples the sand and, evaluated once per fish in a small compute pass before drawing, the fish; it washes out with depth.
 - **Glint**: small fish flash a tight sun specular off their flanks as they cross the light (per-species **glint** slider; it rides on the caustic-lit sunlight, so it pulses with the caustics).
 
 ## Project layout

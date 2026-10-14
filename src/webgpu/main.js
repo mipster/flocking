@@ -3,7 +3,13 @@ import { SPECIES, DEFAULT_COUNTS, TANK_HALF } from '../species.js';
 import { addSpeciesFolders } from '../gui.js';
 import { getDevice, GpuBoids } from './GpuBoids.js';
 import { FishRenderer } from './FishRenderer.js';
-import { CAMERA, DEFAULT_LOOK_HEIGHT, DEFAULT_MURKINESS, DEFAULT_STEERING_SMOOTHING } from './config.js';
+import {
+  CAMERA,
+  DEFAULT_LOOK_HEIGHT,
+  DEFAULT_MURKINESS,
+  DEFAULT_STEERING_SMOOTHING,
+  FRAMES_IN_FLIGHT,
+} from './config.js';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
@@ -25,6 +31,8 @@ const settings = {
   smoothing: DEFAULT_STEERING_SMOOTHING,
   mediumCount: DEFAULT_COUNTS.medium,
   largeCount: DEFAULT_COUNTS.large,
+  simulate: true,
+  pixelRatio: 2, // cap on devicePixelRatio
 };
 
 async function main() {
@@ -35,7 +43,9 @@ async function main() {
   });
   device.addEventListener?.('uncapturederror', (e) => console.error('WebGPU error:', e.error.message));
 
-  const renderer = new FishRenderer(device, canvas, SPECIES);
+  const renderer = new FishRenderer(device, canvas, SPECIES, {
+    samples: new URLSearchParams(location.search).get('msaa') === '1' ? 1 : undefined,
+  });
   let boids = null;
   if (DEBUG) window.__renderer = renderer; // console inspection: camera yaw/pitch/dist
 
@@ -96,6 +106,21 @@ async function main() {
   g.add(settings, 'mediumCount', 0, 20000, 1).name('medium fish').onFinishChange(rebuild);
   g.add(settings, 'largeCount', 0, 2000, 1).name('large fish').onFinishChange(rebuild);
   g.add({ reset: rebuild }, 'reset');
+  if (DEBUG) {
+    // profiling switches: turn layers off one at a time and watch the fps / GPU ms readout
+    const p = gui.addFolder('Profiling (?debug)');
+    p.add(settings, 'simulate').name('simulate fish');
+    for (const [key, name] of [
+      ['fish', 'draw fish'],
+      ['surface', 'draw surface'],
+      ['floor', 'draw sea floor'],
+      ['cull', 'frustum culling'],
+      ['floorCaustics', 'sand caustics'],
+    ]) {
+      p.add(renderer.layers, key).name(name);
+    }
+    p.add(settings, 'pixelRatio', { '1x': 1, '1.5x': 1.5, '2x': 2 }).name('pixel ratio cap');
+  }
   addSpeciesFolders(gui, SPECIES);
   rebuild();
 
@@ -126,38 +151,39 @@ async function main() {
     { passive: false }
   );
 
-  // Only submit a new frame once the previous one has finished on the GPU. Otherwise
+  // Keep at most FRAMES_IN_FLIGHT frames queued on the GPU. Without a limit
   // requestAnimationFrame happily queues frames faster than the GPU can draw them, the
-  // counter reads high and the picture stutters.
+  // counter reads high and the picture stutters; with 1 the CPU and GPU never overlap.
   let last = performance.now();
-  let busy = false;
+  let inFlight = 0;
+  let lastDone = performance.now();
   let done = 0;
   let acc = 0;
   let gpuMsSum = 0;
   const recent = [];
   function frame() {
     requestAnimationFrame(frame);
-    if (busy) return;
+    if (inFlight >= FRAMES_IN_FLIGHT) return;
     const now = performance.now();
     const raw = (now - last) / 1000;
     last = now;
     const dt = Math.min(raw, 1 / 30);
 
-    const dpr = Math.min(window.devicePixelRatio, 2);
+    const dpr = Math.min(window.devicePixelRatio, settings.pixelRatio);
     renderer.resize(Math.floor(window.innerWidth * dpr), Math.floor(window.innerHeight * dpr));
     renderer.murkiness = settings.murkiness;
     renderer.targetY = settings.lookHeight;
-    // one wave clock for both, so the light on the fish matches the water above them; stepping
-    // with dt 0 while paused keeps that light animating
-    const waveTime = now / 1000;
-    boids.step(settings.paused ? 0 : dt * settings.speed, waveTime);
-    renderer.render(boids, waveTime);
+    if (settings.simulate && !settings.paused) boids.step(dt * settings.speed);
+    renderer.render(boids, now / 1000);
 
-    busy = true;
-    const t0 = performance.now();
+    inFlight++;
+    const submitted = performance.now();
     device.queue.onSubmittedWorkDone().then(() => {
-      busy = false;
-      const g = performance.now() - t0;
+      inFlight--;
+      const finished = performance.now();
+      // the GPU was busy from this frame's submission, or from when the previous one finished
+      const g = finished - Math.max(submitted, lastDone);
+      lastDone = finished;
       gpuMsSum += g;
       recent.push(raw * 1000);
       done++;

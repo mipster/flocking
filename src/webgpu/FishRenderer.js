@@ -6,16 +6,18 @@ import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './
 import {
   CAMERA,
   DEFAULT_MURKINESS,
+  FISH_LOD,
   FLOOR_MESH,
   LIGHT_DIRECTION,
   SPECIES_COUNT,
+  WORKGROUP_SIZE,
   WATER,
   WAVE_AMPLITUDE_TOTAL,
   wgslHeader,
 } from './config.js';
 
 const DEPTH_FORMAT = 'depth24plus';
-const SAMPLES = 4;
+const DEFAULT_SAMPLES = 4; // WebGPU allows 1 or 4
 
 // column-major 4x4 helpers (WebGPU clip space: z in [0, 1])
 function perspective(fovy, aspect, near, far) {
@@ -68,7 +70,8 @@ function mul(a, b) {
 }
 
 export class FishRenderer {
-  constructor(device, canvas, species) {
+  constructor(device, canvas, species, { samples = DEFAULT_SAMPLES } = {}) {
+    this.samples = samples;
     this.device = device;
     this.canvas = canvas;
     this.species = species;
@@ -83,13 +86,16 @@ export class FishRenderer {
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.ctx.configure({ device, format: this.format, alphaMode: 'opaque' });
 
-    const verts = buildFishVertices();
-    this.vertexCount = verts.length / 6;
-    this.vbo = device.createBuffer({
-      size: verts.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    device.queue.writeBuffer(this.vbo, 0, verts);
+    const makeMesh = (detail) => {
+      const verts = buildFishVertices(detail);
+      const vbo = device.createBuffer({
+        size: verts.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      device.queue.writeBuffer(vbo, 0, verts);
+      return { vbo, vertexCount: verts.length / 6 };
+    };
+    this.meshes = { simple: makeMesh('simple'), full: makeMesh('full') };
 
     this.ubo = device.createBuffer({
       size: RENDER_UNIFORM_FLOATS * 4,
@@ -122,7 +128,7 @@ export class FishRenderer {
       fragment: { module, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
-      multisample: { count: SAMPLES },
+      multisample: { count: this.samples },
     });
 
     this.floorPipeline = device.createRenderPipeline({
@@ -131,7 +137,7 @@ export class FishRenderer {
       fragment: { module, entryPoint: 'fsFloor', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
-      multisample: { count: SAMPLES },
+      multisample: { count: this.samples },
     });
     // backdrop gradient, drawn first and never writing depth
     this.bgPipeline = device.createRenderPipeline({
@@ -140,7 +146,7 @@ export class FishRenderer {
       fragment: { module, entryPoint: 'fsBg', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list' },
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'always' },
-      multisample: { count: SAMPLES },
+      multisample: { count: this.samples },
     });
     this.bgBindGroup = device.createBindGroup({
       layout: this.bgPipeline.getBindGroupLayout(0),
@@ -162,20 +168,29 @@ export class FishRenderer {
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
-      multisample: { count: SAMPLES },
+      multisample: { count: this.samples },
     });
     this.surfaceBindGroup = device.createBindGroup({
       layout: this.surfacePipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: this.ubo } }],
     });
 
+    this.shadePipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module, entryPoint: 'fishShade' },
+    });
     this.floorBindGroup = device.createBindGroup({
       layout: this.floorPipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: this.ubo } }],
     });
 
     this.size = [0, 0];
-    this.bindGroup = null;
+    this.drawGroups = null;
+    this.drawArgs = device.createBuffer({
+      size: 32,
+      usage:
+        GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
     this.boundFor = null;
   }
 
@@ -187,17 +202,24 @@ export class FishRenderer {
     this.colorTex?.destroy();
     this.depthTex?.destroy();
     const usage = GPUTextureUsage.RENDER_ATTACHMENT;
-    this.colorTex = this.device.createTexture({
-      size: [w, h],
-      format: this.format,
-      sampleCount: SAMPLES,
-      usage,
-    });
+    // without multisampling the scene is drawn straight into the canvas texture
+    this.colorTex =
+      this.samples > 1
+        ? this.device.createTexture({ size: [w, h], format: this.format, sampleCount: this.samples, usage })
+        : null;
     this.depthTex = this.device.createTexture({
       size: [w, h],
       format: DEPTH_FORMAT,
-      sampleCount: SAMPLES,
+      sampleCount: this.samples,
       usage,
+    });
+  }
+
+  // storage for the indices of visible fish, at least one slot so binding is always valid
+  makeList(capacity) {
+    return this.device.createBuffer({
+      size: Math.max(capacity, 1) * 4,
+      usage: GPUBufferUsage.STORAGE,
     });
   }
 
@@ -205,20 +227,51 @@ export class FishRenderer {
     this.device.queue.writeBuffer(this.spBuf, 0, packRenderSpecies(this.species));
   }
 
-  // `time` (seconds) drives the waves; pass the same value to boids.step() so fish light matches.
+  // Per-layer switches for profiling (the viewer exposes them under ?debug).
+  layers = { floor: true, fish: true, surface: true, floorCaustics: true, cull: true };
+
+  // `time` (seconds) drives the waves.
   render(boids, time) {
     const { device } = this;
     if (this.boundFor !== boids) {
-      this.bindGroup = device.createBindGroup({
-        layout: this.pipeline.getBindGroupLayout(0),
+      this.shadeBuf?.destroy();
+      this.shadeBuf = device.createBuffer({
+        size: Math.max(boids.count * 32, 32),
+        usage: GPUBufferUsage.STORAGE,
+      });
+      // fish are stored in species order: the first species get the light mesh
+      const nSimple = boids.counts.slice(0, FISH_LOD.simpleSpecies).reduce((a, b) => a + b, 0);
+      const lists = {
+        simple: this.makeList(nSimple),
+        full: this.makeList(boids.count - nSimple),
+      };
+      this.visibleLists?.forEach((b) => b.destroy());
+      this.visibleLists = [lists.simple, lists.full];
+      this.shadeBindGroup = device.createBindGroup({
+        layout: this.shadePipeline.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: this.ubo } },
           { binding: 1, resource: { buffer: boids.pos } },
-          { binding: 2, resource: { buffer: boids.vel } },
           { binding: 3, resource: { buffer: this.spBuf } },
-          { binding: 4, resource: { buffer: boids.smoothAccel } },
+          { binding: 5, resource: { buffer: this.shadeBuf } },
+          { binding: 7, resource: { buffer: lists.simple } },
+          { binding: 8, resource: { buffer: lists.full } },
+          { binding: 9, resource: { buffer: this.drawArgs } },
         ],
       });
+      const drawGroup = (list) =>
+        device.createBindGroup({
+          layout: this.pipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.ubo } },
+            { binding: 1, resource: { buffer: boids.pos } },
+            { binding: 2, resource: { buffer: boids.vel } },
+            { binding: 3, resource: { buffer: this.spBuf } },
+            { binding: 4, resource: { buffer: this.shadeBuf } },
+            { binding: 6, resource: { buffer: list } },
+          ],
+        });
+      this.drawGroups = { simple: drawGroup(lists.simple), full: drawGroup(lists.full) };
       this.boundFor = boids;
     }
     this.updateSpecies();
@@ -256,6 +309,8 @@ export class FishRenderer {
         half,
         surfaceY: half[1] + WAVE_AMPLITUDE_TOTAL,
         time,
+        floorCaustics: this.layers.floorCaustics,
+        cull: this.layers.cull,
         floorGrid: [cols, rows, spanX, spanZ],
         camera: {
           right: [view[0], view[4], view[8]],
@@ -269,14 +324,28 @@ export class FishRenderer {
     );
 
     const enc = device.createCommandEncoder();
+    if (this.layers.fish) {
+      // reset the instance counts the culling pass appends to
+      device.queue.writeBuffer(
+        this.drawArgs,
+        0,
+        new Uint32Array([this.meshes.simple.vertexCount, 0, 0, 0, this.meshes.full.vertexCount, 0, 0, 0])
+      );
+      const compute = enc.beginComputePass();
+      compute.setPipeline(this.shadePipeline);
+      compute.setBindGroup(0, this.shadeBindGroup);
+      compute.dispatchWorkgroups(Math.ceil(boids.count / WORKGROUP_SIZE));
+      compute.end();
+    }
+    const canvasTex = this.ctx.getCurrentTexture();
     const pass = enc.beginRenderPass({
       colorAttachments: [
         {
-          view: this.colorTex.createView(),
-          resolveTarget: this.ctx.getCurrentTexture().createView(),
+          view: (this.colorTex ?? canvasTex).createView(),
+          resolveTarget: this.colorTex ? canvasTex.createView() : undefined,
           clearValue: { r: 0, g: 0, b: 0, a: 1 },
           loadOp: 'clear',
-          storeOp: 'discard',
+          storeOp: this.colorTex ? 'discard' : 'store',
         },
       ],
       depthStencilAttachment: {
@@ -289,16 +358,26 @@ export class FishRenderer {
     pass.setPipeline(this.bgPipeline);
     pass.setBindGroup(0, this.bgBindGroup);
     pass.draw(3);
-    pass.setPipeline(this.floorPipeline);
-    pass.setBindGroup(0, this.floorBindGroup);
-    pass.draw(cols * rows * 6);
-    pass.setPipeline(this.pipeline);
-    pass.setBindGroup(0, this.bindGroup);
-    pass.setVertexBuffer(0, this.vbo);
-    pass.draw(this.vertexCount, boids.count);
-    pass.setPipeline(this.surfacePipeline);
-    pass.setBindGroup(0, this.surfaceBindGroup);
-    pass.draw(cols * rows * 6);
+    if (this.layers.floor) {
+      pass.setPipeline(this.floorPipeline);
+      pass.setBindGroup(0, this.floorBindGroup);
+      pass.draw(cols * rows * 6);
+    }
+    if (this.layers.fish) {
+      pass.setPipeline(this.pipeline);
+      // survivors of the culling pass; instance counts live in drawArgs
+      pass.setBindGroup(0, this.drawGroups.simple);
+      pass.setVertexBuffer(0, this.meshes.simple.vbo);
+      pass.drawIndirect(this.drawArgs, 0);
+      pass.setBindGroup(0, this.drawGroups.full);
+      pass.setVertexBuffer(0, this.meshes.full.vbo);
+      pass.drawIndirect(this.drawArgs, 16);
+    }
+    if (this.layers.surface) {
+      pass.setPipeline(this.surfacePipeline);
+      pass.setBindGroup(0, this.surfaceBindGroup);
+      pass.draw(cols * rows * 6);
+    }
     pass.end();
     device.queue.submit([enc.finish()]);
   }

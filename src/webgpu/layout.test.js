@@ -24,7 +24,6 @@ describe('packSimParams', () => {
     dims: [30, 8, 20],
     wrap: true,
     smoothing: 0,
-    waveTime: 12.5,
   };
   const p = packSimParams(base);
 
@@ -38,7 +37,6 @@ describe('packSimParams', () => {
     expect(Array.from(p.slice(4, 8))).toEqual([120, 30, 80, 10]); // bounds
     expect(Array.from(p.slice(8, 12))).toEqual([8, 30, 8, 20]); // grid
     expect(p[12]).toBe(1); // flags.x = wrap
-    expect(p[14]).toBe(12.5); // flags.z = wave time
   });
 
   it('encodes wrap off as 0', () => {
@@ -98,7 +96,7 @@ describe('hexToRgb', () => {
 });
 
 describe('packRenderUniforms', () => {
-  const out = packRenderUniforms({
+  const args = {
     viewProj: new Float32Array(16).fill(1),
     light: [0, 3, 4],
     absorption: [0.01, 0.002, 0.001],
@@ -114,7 +112,8 @@ describe('packRenderUniforms', () => {
       tanHalfX: 0.8,
       tanHalfY: 0.5,
     },
-  });
+  };
+  const out = packRenderUniforms(args);
 
   it('is the size render.wgsl expects', () => {
     expect(out.length).toBe(RENDER_UNIFORM_FLOATS);
@@ -122,6 +121,14 @@ describe('packRenderUniforms', () => {
 
   it('normalises the light direction', () => {
     expect(Array.from(out.slice(16, 19))).toEqual([0, expect.closeTo(0.6, 5), expect.closeTo(0.8, 5)]);
+  });
+
+  it('carries the culling and sand-caustic switches in the spare w components', () => {
+    expect(out[19]).toBe(1); // light.w = frustum culling on by default
+    expect(out[43]).toBe(1); // camFwd.w = sand caustics on by default
+    const off = packRenderUniforms({ ...args, cull: false, floorCaustics: false });
+    expect(off[19]).toBe(0);
+    expect(off[43]).toBe(0);
   });
 
   it('places absorption, tank and floor grid', () => {
@@ -138,7 +145,7 @@ describe('packRenderUniforms', () => {
   it('places the camera basis, its field-of-view scales and its position', () => {
     expect(Array.from(out.slice(32, 36))).toEqual([1, 0, 0, expect.closeTo(0.8, 6)]);
     expect(Array.from(out.slice(36, 40))).toEqual([0, 1, 0, expect.closeTo(0.5, 6)]);
-    expect(Array.from(out.slice(40, 44))).toEqual([0, 0, -1, 0]);
+    expect(Array.from(out.slice(40, 44))).toEqual([0, 0, -1, 1]); // forward, sand caustics on
     expect(Array.from(out.slice(44, 48))).toEqual([5, 42, 9, 7.5]);
   });
 });
