@@ -8,6 +8,7 @@ struct RU {
   camUp: vec4f,     // xyz, a = tan(fov/2)
   camFwd: vec4f,    // xyz, a = sand caustics on (1) / off (0)
   camPos: vec4f,    // xyz = camera world position, a = time in seconds
+  post: vec4f,      // x = vignette strength
 };
 
 @group(0) @binding(0) var<uniform> R: RU;
@@ -392,6 +393,17 @@ fn vsSnow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> S
 fn fsSnow(in: SnowOut) -> @location(0) vec4f {
   let a = smoothstep(1.0, 0.25, length(in.uv)) * in.alpha;
   return vec4f(in.col * a, a);
+}
+
+// ---- vignette ------------------------------------------------------------------
+
+// Multiplies the finished frame (blend state does the multiplying) by a factor that falls from 1
+// in the middle to 1 - strength at the corners.
+@fragment
+fn fsVignette(in: BgOut) -> @location(0) vec4f {
+  let r = length(in.ndc) * 0.70710678; // 0 in the middle, 1 at the corners
+  let mask = smoothstep(VIGNETTE_INNER, VIGNETTE_OUTER, r);
+  return vec4f(vec3f(1.0 - R.post.x * mask), 1.0);
 }
 
 // ---- backdrop -----------------------------------------------------------------

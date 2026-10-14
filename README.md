@@ -64,6 +64,7 @@ Three species, each with its own speed, force limit and flocking weights:
 - **Light shafts**: each view ray is marched at half resolution until it reaches the range limit, the surface or the sea floor, accumulating sunlight scattered toward the eye. The sunlight at each sample is modulated by the same wave focusing as the caustics, so the beams sway with the waves, and the haze is brighter looking toward the sun. It is added on top of the finished frame; the **light shafts** slider scales it (0 skips the passes).
 - **Marine snow**: ~24k drifting specks, placed analytically in the vertex shader (a function of index and time, so no simulation or buffers) inside a box that follows the camera. They sink, wander and bob under the waves, are lit and hazed like everything else, and brighten in beams. The **marine snow** slider scales the count.
 - **Patchy haze**: the density the shafts scatter varies slowly in 3D noise and drifts, so beams look uneven (`HAZE` in `config.js`).
+- **Vignette**: a final full-screen pass multiplies the frame by a factor that falls toward the corners (`VIGNETTE` in `config.js`); the **vignette** slider scales it, and 0 skips the pass.
 - **Glint**: small fish flash a tight sun specular off their flanks as they cross the light (per-species **glint** slider; it rides on the caustic-lit sunlight, so it pulses with the caustics).
 
 ## Project layout

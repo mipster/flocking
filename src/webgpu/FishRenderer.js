@@ -8,6 +8,7 @@ import {
   DEFAULT_MURKINESS,
   DEFAULT_SHAFT_STRENGTH,
   DEFAULT_SNOW_AMOUNT,
+  DEFAULT_VIGNETTE,
   FISH_LOD,
   FLOOR_MESH,
   LIGHT_DIRECTION,
@@ -83,6 +84,7 @@ export class FishRenderer {
     this.murkiness = DEFAULT_MURKINESS;
     this.shaftStrength = DEFAULT_SHAFT_STRENGTH;
     this.snowAmount = DEFAULT_SNOW_AMOUNT;
+    this.vignette = DEFAULT_VIGNETTE;
     // orbit camera
     this.yaw = 0;
     this.pitch = CAMERA.startPitch;
@@ -222,6 +224,25 @@ export class FishRenderer {
       },
       primitive: { topology: 'triangle-list' },
       multisample: single,
+    });
+    const multiply = {
+      color: { srcFactor: 'zero', dstFactor: 'src', operation: 'add' },
+      alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
+    };
+    this.vignettePipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsBg' },
+      fragment: {
+        module,
+        entryPoint: 'fsVignette',
+        targets: [{ format: this.format, blend: multiply }],
+      },
+      primitive: { topology: 'triangle-list' },
+      multisample: single,
+    });
+    this.vignetteBindGroup = device.createBindGroup({
+      layout: this.vignettePipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
     });
     this.shaftBindGroup = device.createBindGroup({
       layout: this.shaftPipeline.getBindGroupLayout(0),
@@ -381,6 +402,7 @@ export class FishRenderer {
         floorCaustics: this.layers.floorCaustics,
         cull: this.layers.cull,
         shaftStrength: useShafts ? this.shaftStrength : 0,
+        vignette: this.vignette,
         floorGrid: [cols, rows, spanX, spanZ],
         camera: {
           right: [view[0], view[4], view[8]],
@@ -479,6 +501,15 @@ export class FishRenderer {
       composite.setBindGroup(0, this.compositeBindGroup);
       composite.draw(3);
       composite.end();
+    }
+    if (this.vignette > 0) {
+      const vignette = enc.beginRenderPass({
+        colorAttachments: [{ view: canvasTex.createView(), loadOp: 'load', storeOp: 'store' }],
+      });
+      vignette.setPipeline(this.vignettePipeline);
+      vignette.setBindGroup(0, this.vignetteBindGroup);
+      vignette.draw(3);
+      vignette.end();
     }
     device.queue.submit([enc.finish()]);
   }

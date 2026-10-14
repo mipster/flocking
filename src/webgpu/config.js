@@ -175,6 +175,14 @@ export const DEFAULT_SHAFT_STRENGTH = 1;
 export const HAZE = { scale: 55, drift: 1.5, amount: 0.9 };
 
 /**
+ * Vignette: darkens the frame toward its corners, which frames the scene and draws the eye to
+ * the middle. `inner`/`outer` are distances from the centre (0 = middle, 1 = corner) where the
+ * darkening starts and reaches its full strength; the viewer's slider scales the strength.
+ */
+export const VIGNETTE = { inner: 0.4, outer: 1.0 };
+export const DEFAULT_VIGNETTE = 0.5;
+
+/**
  * Marine snow: drifting specks that give the water scale and depth. Each speck's position is a
  * pure function of its index and the time (no simulation), wrapped inside a box that follows the
  * camera, and lit like everything else, brighter where it crosses a beam.
@@ -234,6 +242,8 @@ const CAUSTIC_FADE = ${CAUSTICS.fade};
 const CAUSTIC_BASE = ${CAUSTICS.base};
 const CAUSTIC_GAIN = ${CAUSTICS.gain};
 const CAUSTIC_MIN_DET = ${CAUSTICS.minDeterminant};
+const VIGNETTE_INNER = ${VIGNETTE.inner};
+const VIGNETTE_OUTER = ${VIGNETTE.outer};
 const HAZE_SCALE = ${HAZE.scale};
 const HAZE_DRIFT = ${HAZE.drift};
 const HAZE_AMOUNT = ${HAZE.amount};
