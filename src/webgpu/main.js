@@ -1,5 +1,5 @@
 import GUI from 'lil-gui';
-import { SPECIES, DEFAULT_COUNTS } from '../species.js';
+import { SPECIES, DEFAULT_COUNTS, TANK_HALF } from '../species.js';
 import { addSpeciesFolders } from '../gui.js';
 import { getDevice, GpuBoids } from './GpuBoids.js';
 import { FishRenderer } from './FishRenderer.js';
@@ -14,7 +14,10 @@ const settings = {
   maxPerCell: 8,
   speed: 1,
   paused: false,
-  fogDensity: 0.006,
+  boundary: 'wrap',
+  tankWidth: 240,
+  tankDepth: 160,
+  fogDensity: 0.003,
   mediumCount: DEFAULT_COUNTS.medium,
   largeCount: DEFAULT_COUNTS.large,
 };
@@ -33,8 +36,12 @@ async function main() {
     const large = Math.min(settings.largeCount, total);
     const medium = Math.min(settings.mediumCount, total - large);
     boids = new GpuBoids(device, SPECIES, [total - medium - large, medium, large], {
-      mode: settings.mode, maxPerCell: settings.maxPerCell,
+      mode: settings.mode,
+      maxPerCell: settings.maxPerCell,
+      half: [settings.tankWidth / 2, TANK_HALF[1], settings.tankDepth / 2],
+      wrap: settings.boundary === 'wrap',
     });
+    window.__boids = boids; // handy for console inspection
   }
 
   const gui = new GUI({ title: 'Fish flock (WebGPU)' });
@@ -47,6 +54,10 @@ async function main() {
     .onChange((v) => { boids.mode = v; });
   g.add(settings, 'maxPerCell', 1, 64, 1).name('samples / cell')
     .onChange((v) => { boids.maxPerCell = v; });
+  g.add(settings, 'boundary', { 'wrap around (x, z)': 'wrap', 'soft walls': 'walls' }).name('side edges')
+    .onChange((v) => { boids.wrap = v === 'wrap'; });
+  g.add(settings, 'tankWidth', 80, 800, 10).name('tank width').onFinishChange(rebuild);
+  g.add(settings, 'tankDepth', 80, 800, 10).name('tank depth').onFinishChange(rebuild);
   g.add(settings, 'speed', 0, 3, 0.05).name('speed ×');
   g.add(settings, 'paused').name('pause');
   g.add(settings, 'fogDensity', 0, 0.03, 0.001).name('fog');

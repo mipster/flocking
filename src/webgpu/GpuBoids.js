@@ -1,5 +1,5 @@
 import simWGSL from './sim.wgsl?raw';
-import { TANK_HALF } from '../species.js';
+import { TANK_HALF as DEFAULT_HALF } from '../species.js';
 
 export const CELL_SIZE = 8;
 const WG = 64;
@@ -21,30 +21,31 @@ const ENTRY_POINTS = ['snapshot', 'steerBrute', 'clearCells', 'countCells', 'sca
 
 export class GpuBoids {
   // counts = [small, medium, large]; mode = 'grid' | 'brute'
-  constructor(device, species, counts, { mode = 'grid', maxPerCell = 8 } = {}) {
+  constructor(device, species, counts, { mode = 'grid', maxPerCell = 8, half = DEFAULT_HALF, wrap = true } = {}) {
     this.device = device;
     this.species = species;
     this.mode = mode;
     this.maxPerCell = maxPerCell;
+    this.half = half;
+    this.wrap = wrap; // true: fish re-enter on the opposite x/z edge; false: soft side walls
     this.count = counts[0] + counts[1] + counts[2];
     this.time = 0;
 
-    const half = TANK_HALF;
     this.dims = half.map((h) => Math.ceil((2 * h) / CELL_SIZE));
     this.keys = this.dims[0] * this.dims[1] * this.dims[2] * 3;
 
     const S = GPUBufferUsage.STORAGE;
     const mk = (size, usage) => device.createBuffer({ size: Math.max(size, 16), usage });
     const n = this.count;
-    this.pos = mk(n * 16, S | GPUBufferUsage.COPY_DST);
-    this.vel = mk(n * 16, S | GPUBufferUsage.COPY_DST);
+    this.pos = mk(n * 16, S | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    this.vel = mk(n * 16, S | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
     this.spos = mk(n * 16, S);
     this.svel = mk(n * 16, S);
     this.cellCount = mk(this.keys * 4, S);
     this.cellStart = mk((this.keys + 1) * 4, S);
     this.keyOf = mk(n * 4, S);
     this.rankOf = mk(n * 4, S);
-    this.params = mk(48, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    this.params = mk(64, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.specBuf = mk(12 * 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
 
     this.upload(counts);
@@ -84,9 +85,9 @@ export class GpuBoids {
     for (let i = 0; i < n; i++) {
       const sp = i < nS ? 0 : i < nS + nM ? 1 : 2;
       const o = i * 4;
-      posData[o] = (Math.random() * 2 - 1) * TANK_HALF[0] * 0.8;
-      posData[o + 1] = (Math.random() * 2 - 1) * TANK_HALF[1] * 0.8;
-      posData[o + 2] = (Math.random() * 2 - 1) * TANK_HALF[2] * 0.8;
+      posData[o] = (Math.random() * 2 - 1) * this.half[0] * 0.8;
+      posData[o + 1] = (Math.random() * 2 - 1) * this.half[1] * 0.8;
+      posData[o + 2] = (Math.random() * 2 - 1) * this.half[2] * 0.8;
       posData[o + 3] = sp;
       const u = Math.random() * 2 - 1;
       const a = Math.random() * Math.PI * 2;
@@ -121,8 +122,9 @@ export class GpuBoids {
     this.syncSpecies();
     q.writeBuffer(this.params, 0, new Float32Array([
       dt, this.time, this.count, this.maxPerCell,
-      TANK_HALF[0], TANK_HALF[1], TANK_HALF[2], 10,
+      this.half[0], this.half[1], this.half[2], 10,
       CELL_SIZE, this.dims[0], this.dims[1], this.dims[2],
+      this.wrap ? 1 : 0, 0, 0, 0,
     ]));
 
     const enc = this.device.createCommandEncoder();

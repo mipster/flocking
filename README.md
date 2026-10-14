@@ -1,6 +1,6 @@
 # GPU Fish Flocking
 
-A 3D fish-flocking demo built with [three.js](https://threejs.org/). Boid steering runs on the GPU (WebGL2 GPGPU via `GPUComputationRenderer`), and the fish are drawn as one instanced low-poly mesh. It is a browser rebuild of the flocking demo from *The Nature of Code*, extended with several fish species.
+A 3D fish-flocking demo running entirely on the GPU with WebGPU compute shaders. It is a browser rebuild of the flocking demo from *The Nature of Code*, extended with several fish species, and scales from thousands to a million fish using a spatial grid.
 
 ## Run it
 
@@ -11,12 +11,10 @@ npm run dev
 
 Then open http://localhost:5173. A production build is available with `npm run build`.
 
-Requires a browser with WebGL2 and float render targets (any recent desktop browser).
+Requires a browser with WebGPU (Chrome, Edge or Brave 113+ on macOS, Windows and ChromeOS).
 
-## WebGPU version and benchmark
-
-- http://localhost:5173/webgpu.html is the same flock on WebGPU compute shaders with a GPU spatial grid (counting sort into cell and species buckets, capped samples per bucket). It runs 100k to 1M+ small fish; fish count, neighbor mode and samples per cell are in the panel.
-- http://localhost:5173/bench.html times simulation steps for WebGL2 brute force, WebGPU brute force and WebGPU grid at 4k to 1M fish. Keep the tab visible while it runs, because a hidden tab can skip GPU work and give bogus numbers.
+- **Viewer** (`/`): the flock. Fish count (16k to 2M), neighbor mode (spatial grid or brute force), samples per cell, side edges (wrap around or soft walls), tank width and depth, and exact medium and large fish counts are in the panel.
+- **Benchmark** (`/bench.html`): times simulation steps for WebGPU brute force and the grid at 4k to 1M fish. Keep the tab visible while it runs, because a hidden tab can skip GPU work and give bogus numbers.
 
 ## Behavior
 
@@ -42,26 +40,27 @@ Three species, each with its own speed, force limit and flocking weights:
 
 ## How it works
 
-- Position and velocity live in float textures (one texel per fish), double-buffered. Each frame runs a velocity pass, then a position pass.
-- Species parameters are uniform arrays indexed by species id, so GUI edits take effect immediately.
-- The velocity pass is brute force O(N²): every fish scans every texel. This is fine up to about 16k fish on a decent GPU.
-- The fish vertex shader reads position and velocity from the textures, builds an orientation basis from the velocity and bends the tail with the swim phase.
+- Position and velocity live in GPU storage buffers (one entry per fish). Each frame runs a few compute passes, then draws one instanced low-poly fish mesh.
+- **Spatial grid**: fish are counting-sorted into (cell, species) buckets each frame, and each fish scans only nearby cells, taking a capped number of samples per bucket. Brute force (tiled through workgroup memory) is available for comparison.
+- **Boundaries**: the floor and surface are hard barriers. Side edges either wrap around (same direction and velocity, neighbors found across the seam) or are soft walls.
+- The fish vertex shader builds an orientation basis from the velocity and bends the tail with the swim phase.
 
 ## Project layout
 
 ```
-src/main.js                  renderer, scene, camera, loop
-src/species.js               species definitions and defaults
-src/gui.js                   lil-gui panels
-src/sim/BoidSimulation.js    GPUComputationRenderer setup and stepping
-src/sim/velocity.frag.glsl   steering (separation, alignment, cohesion, fear, bounds)
-src/sim/position.frag.glsl   integration
-src/render/FishSchool.js     fish geometry and instancing
-src/render/fish.vert.glsl    orientation, tail wiggle
-src/render/fish.frag.glsl    lighting and fog
+index.html, bench.html
+src/species.js               species definitions, defaults and tank size
+src/gui.js                   species parameter panels
+src/webgpu/main.js           viewer: device, GUI, camera, frame loop
+src/webgpu/GpuBoids.js       buffers, pipelines, per-frame compute passes
+src/webgpu/sim.wgsl          steering, spatial grid, boundaries
+src/webgpu/FishRenderer.js   instanced rendering, camera matrices
+src/webgpu/render.wgsl       orientation, tail wiggle, lighting, fog
+src/webgpu/fishGeometry.js   low-poly fish mesh
+src/bench.js                 benchmark runner
 ```
 
 ## Roadmap
 
-- **Scale**: a GPU spatial grid (cell index, bitonic sort, neighbor-cell search) to reach 100k+ fish.
-- **Polish**: water gradient, caustics, light shafts, a mouse-controlled predator or food source, and presets.
+- Sea floor, absorption-based water colour, animated surface, caustics and light shafts.
+- Mouse-controlled predator or food source, and presets.

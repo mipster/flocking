@@ -1,9 +1,7 @@
-import * as THREE from 'three';
 import { SPECIES } from './species.js';
-import { BoidSimulation } from './sim/BoidSimulation.js';
 import { getDevice, GpuBoids } from './webgpu/GpuBoids.js';
 
-// side^2 fish; large share fixed at ~0.5%, medium ~2% so every engine sees the same mix
+// side^2 fish; large share fixed at ~0.5%, medium ~2% so every run sees the same mix
 const SIDES = [64, 128, 256, 512, 1024];
 const SLOW_MS = 600; // stop growing an engine's fish count once one step costs more than this
 const DT = 1 / 60;
@@ -33,17 +31,6 @@ async function timeBatches(stepFn, syncFn, budgetMs = 1500) {
   return (performance.now() - t0) / steps;
 }
 
-async function benchWebGL(side, renderer) {
-  const sim = new BoidSimulation(renderer, side, SPECIES, countsFor(side * side));
-  const buf = new Float32Array(4);
-  const sync = async () => {
-    renderer.readRenderTargetPixels(sim.gpu.getCurrentRenderTarget(sim.posVar), 0, 0, 1, 1, buf);
-  };
-  const ms = await timeBatches(() => sim.step(DT), sync);
-  sim.dispose();
-  return ms;
-}
-
 async function benchWebGPU(n, device, mode, maxPerCell) {
   const boids = new GpuBoids(device, SPECIES, countsFor(n), { mode, maxPerCell });
   const ms = await timeBatches(() => boids.step(DT), () => boids.sync());
@@ -55,11 +42,6 @@ async function run() {
   $('run').disabled = true;
   const results = []; // {engine, n, ms}
   const engines = [];
-
-  const canvas = document.createElement('canvas');
-  const renderer = new THREE.WebGLRenderer({ canvas });
-  // beyond 65k a brute-force step runs for seconds and the browser's GPU watchdog kills it
-  engines.push({ name: 'WebGL2 brute force', maxN: 65536, run: (n) => benchWebGL(Math.round(Math.sqrt(n)), renderer) });
 
   let device = null;
   try {

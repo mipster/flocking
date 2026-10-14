@@ -1,5 +1,5 @@
 import renderWGSL from './render.wgsl?raw';
-import { buildFishGeometry } from '../render/FishSchool.js';
+import { buildFishVertices } from './fishGeometry.js';
 
 const DEPTH_FORMAT = 'depth24plus';
 const SAMPLES = 4;
@@ -52,20 +52,14 @@ export class FishRenderer {
     // orbit camera
     this.yaw = 0;
     this.pitch = 0.2;
-    this.dist = 130;
+    this.dist = 260;
 
     this.ctx = canvas.getContext('webgpu');
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.ctx.configure({ device, format: this.format, alphaMode: 'opaque' });
 
-    const geo = buildFishGeometry();
-    const p = geo.getAttribute('position');
-    const n = geo.getAttribute('normal');
-    const verts = new Float32Array(p.count * 6);
-    for (let i = 0; i < p.count; i++) {
-      verts.set([p.getX(i), p.getY(i), p.getZ(i), n.getX(i), n.getY(i), n.getZ(i)], i * 6);
-    }
-    this.vertexCount = p.count;
+    const verts = buildFishVertices();
+    this.vertexCount = verts.length / 6;
     this.vbo = device.createBuffer({ size: verts.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.vbo, 0, verts);
 

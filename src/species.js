@@ -32,4 +32,5 @@ export const SPECIES = [
 
 // default absolute numbers of medium / large fish; the rest are small
 export const DEFAULT_COUNTS = { medium: 300, large: 8 };
-export const TANK_HALF = [60, 30, 40];
+// default tank half extents (x width, y height, z depth); height is fixed, floor and surface are barriers
+export const TANK_HALF = [120, 30, 80];
