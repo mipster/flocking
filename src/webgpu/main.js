@@ -3,7 +3,7 @@ import { SPECIES, DEFAULT_COUNTS, TANK_HALF } from '../species.js';
 import { addSpeciesFolders } from '../gui.js';
 import { getDevice, GpuBoids } from './GpuBoids.js';
 import { FishRenderer } from './FishRenderer.js';
-import { CAMERA, DEFAULT_FOG_DENSITY } from './config.js';
+import { CAMERA, DEFAULT_MURKINESS, DEFAULT_STEERING_SMOOTHING } from './config.js';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
@@ -20,7 +20,8 @@ const settings = {
   boundary: 'wrap',
   tankWidth: 240,
   tankDepth: 160,
-  fogDensity: DEFAULT_FOG_DENSITY,
+  murkiness: DEFAULT_MURKINESS,
+  smoothing: DEFAULT_STEERING_SMOOTHING,
   mediumCount: DEFAULT_COUNTS.medium,
   largeCount: DEFAULT_COUNTS.large,
 };
@@ -46,6 +47,7 @@ async function main() {
       maxPerCell: settings.maxPerCell,
       half: [settings.tankWidth / 2, TANK_HALF[1], settings.tankDepth / 2],
       wrap: settings.boundary === 'wrap',
+      smoothing: settings.smoothing,
     });
     if (DEBUG) window.__boids = boids; // console inspection: open the page with ?debug
   }
@@ -73,16 +75,21 @@ async function main() {
     .onChange((v) => {
       boids.maxPerCell = v;
     });
-  g.add(settings, 'boundary', { 'wrap around (x, z)': 'wrap', 'soft walls': 'walls' })
-    .name('side edges')
+  g.add(settings, 'boundary', { 'wrap left / right': 'wrap', 'soft walls': 'walls' })
+    .name('left / right edges')
     .onChange((v) => {
       boids.wrap = v === 'wrap';
     });
   g.add(settings, 'tankWidth', 80, 800, 10).name('tank width').onFinishChange(rebuild);
   g.add(settings, 'tankDepth', 80, 800, 10).name('tank depth').onFinishChange(rebuild);
+  g.add(settings, 'smoothing', 0, 0.5, 0.01)
+    .name('steering smoothing (s)')
+    .onChange((v) => {
+      boids.smoothing = v;
+    });
   g.add(settings, 'speed', 0, 3, 0.05).name('speed ×');
   g.add(settings, 'paused').name('pause');
-  g.add(settings, 'fogDensity', 0, 0.03, 0.001).name('fog');
+  g.add(settings, 'murkiness', 0, 4, 0.05).name('water murkiness');
   g.add(settings, 'mediumCount', 0, 20000, 1).name('medium fish').onFinishChange(rebuild);
   g.add(settings, 'largeCount', 0, 2000, 1).name('large fish').onFinishChange(rebuild);
   g.add({ reset: rebuild }, 'reset');
@@ -135,7 +142,7 @@ async function main() {
 
     const dpr = Math.min(window.devicePixelRatio, 2);
     renderer.resize(Math.floor(window.innerWidth * dpr), Math.floor(window.innerHeight * dpr));
-    renderer.fogDensity = settings.fogDensity;
+    renderer.murkiness = settings.murkiness;
     if (!settings.paused) boids.step(dt * settings.speed);
     renderer.render(boids);
 

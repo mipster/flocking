@@ -1,6 +1,13 @@
 import simWGSL from './sim.wgsl?raw';
 import { floorWGSL } from './floor.js';
-import { CELL_SIZE, WALL_MARGIN, WORKGROUP_SIZE, SPECIES_COUNT, wgslHeader } from './config.js';
+import {
+  DEFAULT_STEERING_SMOOTHING,
+  CELL_SIZE,
+  WALL_MARGIN,
+  WORKGROUP_SIZE,
+  SPECIES_COUNT,
+  wgslHeader,
+} from './config.js';
 import { SIM_PARAMS_FLOATS, SIM_SPECIES_STRIDE, packSimParams, packSimSpecies } from './layout.js';
 import { TANK_HALF as DEFAULT_HALF } from '../species.js';
 
@@ -12,6 +19,7 @@ export async function getDevice() {
     requiredLimits: {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
       maxBufferSize: adapter.limits.maxBufferSize,
+      maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
     },
   });
   return { adapter, device };
@@ -33,18 +41,27 @@ export class GpuBoids {
     device,
     species,
     counts,
-    { mode = 'grid', maxPerCell = 8, half = DEFAULT_HALF, wrap = true } = {}
+    {
+      mode = 'grid',
+      maxPerCell = 8,
+      half = DEFAULT_HALF,
+      wrap = true,
+      smoothing = DEFAULT_STEERING_SMOOTHING,
+    } = {}
   ) {
     this.device = device;
     this.species = species;
     this.mode = mode;
     this.maxPerCell = maxPerCell;
-    this.half = half;
-    this.wrap = wrap; // true: fish re-enter on the opposite x/z edge; false: soft side walls
+    this.smoothing = smoothing; // steering low-pass time constant in seconds; 0 disables
+    // x and z must be whole numbers of grid cells so the wrap seam lines up with a cell edge
+    const snap = (h) => (Math.ceil((2 * h) / CELL_SIZE) * CELL_SIZE) / 2;
+    this.half = [snap(half[0]), half[1], snap(half[2])];
+    this.wrap = wrap; // true: fish leaving the left/right edge re-enter opposite; false: soft side walls
     this.count = counts[0] + counts[1] + counts[2];
     this.time = 0;
 
-    this.dims = half.map((h) => Math.ceil((2 * h) / CELL_SIZE));
+    this.dims = this.half.map((h) => Math.ceil((2 * h) / CELL_SIZE));
     this.keys = this.dims[0] * this.dims[1] * this.dims[2] * 3;
 
     const S = GPUBufferUsage.STORAGE;
@@ -56,8 +73,8 @@ export class GpuBoids {
     this.svel = mk(n * 16, S);
     this.cellCount = mk(this.keys * 4, S);
     this.cellStart = mk((this.keys + 1) * 4, S);
-    this.keyOf = mk(n * 4, S);
-    this.rankOf = mk(n * 4, S);
+    this.keyRank = mk(n * 8, S);
+    this.smoothAccel = mk(n * 16, S);
     this.params = mk(SIM_PARAMS_FLOATS * 4, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.specBuf = mk(
       SPECIES_COUNT * SIM_SPECIES_STRIDE * 4,
@@ -99,8 +116,8 @@ export class GpuBoids {
         b(5, this.svel),
         b(6, this.cellCount),
         b(7, this.cellStart),
-        b(8, this.keyOf),
-        b(9, this.rankOf),
+        b(8, this.keyRank),
+        b(9, this.smoothAccel),
       ],
     });
   }
@@ -152,6 +169,7 @@ export class GpuBoids {
         cellSize: CELL_SIZE,
         dims: this.dims,
         wrap: this.wrap,
+        smoothing: this.smoothing,
       })
     );
 
@@ -189,8 +207,8 @@ export class GpuBoids {
       'svel',
       'cellCount',
       'cellStart',
-      'keyOf',
-      'rankOf',
+      'keyRank',
+      'smoothAccel',
       'params',
       'specBuf',
     ]) {

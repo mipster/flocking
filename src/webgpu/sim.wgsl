@@ -7,10 +7,31 @@ struct Params {
   a: vec4f,      // delta, time, count, maxPerCell
   bounds: vec4f, // tank half extents xyz, wall margin
   grid: vec4f,   // cellSize, nx, ny, nz
-  flags: vec4f,  // x = wrap horizontally (1) or soft walls (0)
+  flags: vec4f,  // x = wrap left/right (1) or soft side walls (0), y = steering blend per step (1 = no smoothing)
 };
 
 fn wrapOn() -> bool { return P.flags.x > 0.5; }
+
+// The left/right edges are periodic when wrapping; z and y never are. Every wrap rule goes
+// through these two helpers.
+fn wrapPosition(p: vec3f) -> vec3f {
+  var q = p;
+  if (wrapOn()) {
+    let fullX = P.bounds.x * 2.0;
+    q.x -= fullX * floor((q.x + P.bounds.x) / fullX);
+  }
+  return q;
+}
+
+// shortest offset between two positions, across the seam if that is closer
+fn minImage(d: vec3f) -> vec3f {
+  var q = d;
+  if (wrapOn()) {
+    let fullX = P.bounds.x * 2.0;
+    q.x -= fullX * round(q.x / fullX);
+  }
+  return q;
+}
 
 @group(0) @binding(0) var<uniform> P: Params;
 // per species, 4 x vec4: [maxSpeed, maxForce, sepR, aliR] [cohR, sepW, aliW, cohW]
@@ -22,8 +43,8 @@ fn wrapOn() -> bool { return P.flags.x > 0.5; }
 @group(0) @binding(5) var<storage, read_write> svel: array<vec4f>;
 @group(0) @binding(6) var<storage, read_write> cellCount: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read_write> cellStart: array<u32>;
-@group(0) @binding(8) var<storage, read_write> keyOf: array<u32>;
-@group(0) @binding(9) var<storage, read_write> rankOf: array<u32>;
+@group(0) @binding(8) var<storage, read_write> keyRank: array<vec2u>; // per fish: (bucket key, rank in bucket)
+@group(0) @binding(9) var<storage, read_write> smoothAccel: array<vec4f>; // low-passed steering force
 
 const TAU = 6.28318530718;
 
@@ -56,20 +77,16 @@ fn loadMe(i: u32) -> Me {
 
 fn consider(acc: ptr<function, Acc>, m: Me, ow: vec4f, ov: vec3f, sepScale: f32) {
   if (ow.w < 0.0) { return; }
-  var d = m.pos - ow.xyz;
-  if (wrapOn()) {
-    // shortest wrapped offset in x and z (y is never wrapped)
-    let full = P.bounds.xyz * 2.0;
-    d.x -= full.x * round(d.x / full.x);
-    d.z -= full.z * round(d.z / full.z);
-  }
+  let d = minImage(m.pos - ow.xyz);
   let opos = m.pos - d;
   let d2 = dot(d, d);
   if (d2 > m.scanR * m.scanR || d2 < 1e-8) { return; }
   let dist = sqrt(d2);
   let osp = u32(ow.w + 0.5);
 
-  if (dist < m.sepR) { (*acc).sep += d / d2 * sepScale; }
+  // push away with strength that grows as the neighbor gets closer (0 at the radius edge),
+  // so crossing the boundary is a smooth change instead of an on/off kick
+  if (dist < m.sepR) { (*acc).sep += (d / dist) * (1.0 - dist / m.sepR) * sepScale; }
 
   if (osp == m.sp) {
     if (dist < m.aliR) { (*acc).ali += ov; (*acc).aliN += 1.0; }
@@ -89,6 +106,13 @@ fn steer(dir: vec3f, v: vec3f, maxSpeed: f32, maxForce: f32) -> vec3f {
   return select(s, s * (maxForce / sl), sl > maxForce);
 }
 
+// Repulsion: magnitude follows the proximity-weighted sum (saturating at maxForce), not a
+// full-strength steer toward a normalised direction, so it fades in and out smoothly.
+fn pushAway(v: vec3f, maxForce: f32) -> vec3f {
+  let l = length(v);
+  return select(v, v / l, l > 1.0) * maxForce;
+}
+
 fn integrate(i: u32, m: Me, a: Acc) {
   let dt = P.a.x;
   let t = P.a.y;
@@ -96,10 +120,10 @@ fn integrate(i: u32, m: Me, a: Acc) {
   let s2 = SPEC[m.sp * 4u + 2u];
   let s3 = SPEC[m.sp * 4u + 3u];
 
-  var force = steer(a.sep, m.vel, m.maxSpeed, m.maxForce) * s1.y;
+  var force = pushAway(a.sep, m.maxForce) * s1.y;
   if (a.aliN > 0.0) { force += steer(a.ali / a.aliN, m.vel, m.maxSpeed, m.maxForce) * s1.z; }
   if (a.cohN > 0.0) { force += steer(a.coh / a.cohN - m.pos, m.vel, m.maxSpeed, m.maxForce) * s1.w; }
-  force += steer(a.fear, m.vel, m.maxSpeed * 1.3, m.maxForce * 2.0) * s2.y;
+  force += pushAway(a.fear, m.maxForce * 2.0) * s2.y;
   if (a.huntN > 0.0) { force += steer(a.hunt / a.huntN - m.pos, m.vel, m.maxSpeed, m.maxForce) * s2.w; }
 
   // lazy wander with a per-fish phase offset
@@ -107,11 +131,20 @@ fn integrate(i: u32, m: Me, a: Acc) {
   let wd = vec3f(sin(t * 0.40 + id * 6.1), sin(t * 0.31 + id * 3.7), cos(t * 0.27 + id * 9.3));
   force += wd * m.maxForce * s3.x;
 
+  // Low-pass the flocking force. Dense flocks sample neighbors stochastically and jostle, so the
+  // raw force fluctuates frame to frame; smoothing keeps headings from twitching. Barrier forces
+  // below are added afterwards so walls and the floor still react instantly.
+  let alpha = P.flags.y;
+  if (alpha < 1.0) {
+    force = mix(smoothAccel[i].xyz, force, alpha);
+    smoothAccel[i] = vec4f(force, 0.0);
+  }
+
   // soft tank walls
   let margin = P.bounds.w;
   let inner = P.bounds.xyz - vec3f(margin);
   var over = (abs(m.pos) - inner) / margin;
-  if (wrapOn()) { over.x = 0.0; over.z = 0.0; }
+  if (wrapOn()) { over.x = 0.0; }   // left/right edges are open when wrapping
   over.y = max(0.0, (m.pos.y - inner.y) / margin);   // top only; the bottom is the sea floor
   force -= sign(m.pos) * clamp(over, vec3f(0.0), vec3f(2.0)) * m.maxForce * 2.0;
 
@@ -126,20 +159,17 @@ fn integrate(i: u32, m: Me, a: Acc) {
   speed = length(v);
 
   let phase = (m.phase + dt * (3.0 + speed * 1.2 / m.scale)) % TAU;
-  var np = m.pos + v * dt;
+  var np = wrapPosition(m.pos + v * dt);
   let h = P.bounds.xyz;
-  if (wrapOn()) {
-    let full = h * 2.0;
-    np.x -= full.x * floor((np.x + h.x) / full.x);
-    np.z -= full.z * floor((np.z + h.z) / full.z);
-  } else {
-    // hard backstop so nothing ever leaves through a side wall
-    if (abs(np.x) > h.x) { np.x = sign(np.x) * h.x; v.x = 0.0; }
-    if (abs(np.z) > h.z) { np.z = sign(np.z) * h.z; v.z = 0.0; }
+  if (!wrapOn() && abs(np.x) > h.x) {
+    np.x = sign(np.x) * h.x;
+    v.x = 0.0;
   }
-  // sea floor and surface are barriers in both modes
-  let yMin = floorY(np.xz, h) + 0.6;
-  let yMax = h.y - 0.5;
+  // near and far walls, the sea floor and the surface are barriers in both modes; the clearance
+  // scales with body size so big fish don't clip into the sand or poke their fin out of the water
+  if (abs(np.z) > h.z) { np.z = sign(np.z) * h.z; v.z = 0.0; }
+  let yMin = floorY(np.xz, h) + CLEARANCE_BASE + CLEARANCE_BELLY * m.scale;
+  let yMax = h.y - CLEARANCE_BASE - CLEARANCE_FIN * m.scale;
   if (np.y < yMin) { np.y = yMin; v.y = max(v.y, 0.0); }
   if (np.y > yMax) { np.y = yMax; v.y = min(v.y, 0.0); }
 
@@ -168,12 +198,7 @@ fn rawCell(p: vec3f) -> vec3i {
 
 fn cellOfPos(p: vec3f) -> vec3i {
   let d = gridDims();
-  var c = rawCell(p);
-  if (wrapOn()) {
-    c.x = wrapIdx(c.x, d.x);
-    c.z = wrapIdx(c.z, d.z);
-  }
-  return clamp(c, vec3i(0), d - vec3i(1));
+  return clamp(rawCell(wrapPosition(p)), vec3i(0), d - vec3i(1));
 }
 
 // ---- brute force -----------------------------------------------------------
@@ -235,8 +260,7 @@ fn countCells(@builtin(global_invocation_id) gid: vec3u) {
   let d = gridDims();
   let cell = u32((c.z * d.y + c.y) * d.x + c.x);
   let key = cell * 3u + u32(p.w + 0.5);
-  keyOf[i] = key;
-  rankOf[i] = atomicAdd(&cellCount[key], 1u);
+  keyRank[i] = vec2u(key, atomicAdd(&cellCount[key], 1u));
 }
 
 @compute @workgroup_size(1)
@@ -254,7 +278,8 @@ fn scanCells() {
 fn scatter(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i >= u32(P.a.z)) { return; }
-  let dst = cellStart[keyOf[i]] + rankOf[i];
+  let kr = keyRank[i];
+  let dst = cellStart[kr.x] + kr.y;
   spos[dst] = pos[i];
   svel[dst] = vel[i];
 }
@@ -269,17 +294,18 @@ fn steerGrid(@builtin(global_invocation_id) gid: vec3u) {
   let cs = P.grid.x;
   let half = P.bounds.xyz;
   let dims = gridDims();
-  var r = i32(ceil(m.scanR / cs));
+  let r = i32(ceil(m.scanR / cs));
   let wrap = wrapOn();
-  let c0 = select(cellOfPos(m.pos), rawCell(m.pos), wrap);
+  let myp = wrapPosition(m.pos); // my position in the canonical image
+  let c0 = cellOfPos(myp);
   var lo = max(c0 - vec3i(r), vec3i(0));
   var hi = min(c0 + vec3i(r), dims - vec3i(1));
   if (wrap) {
-    // x and z walk unclamped cell coordinates and wrap into the grid below;
-    // keep the span under the grid width so no cell is visited twice
-    r = min(r, (min(dims.x, dims.z) - 1) / 2);
-    lo.x = c0.x - r; hi.x = c0.x + r;
-    lo.z = c0.z - r; hi.z = c0.z + r;
+    // x walks unclamped cell coordinates and wraps into the grid below; keep the span under
+    // the grid width so no cell is visited twice
+    let rx = min(r, (dims.x - 1) / 2);
+    lo.x = c0.x - rx;
+    hi.x = c0.x + rx;
   }
   let cap = max(u32(P.a.w), 1u);
   let h = pcg(i ^ u32(P.a.y * 997.0));
@@ -288,21 +314,14 @@ fn steerGrid(@builtin(global_invocation_id) gid: vec3u) {
   for (var z = lo.z; z <= hi.z; z++) {
     for (var y = lo.y; y <= hi.y; y++) {
       for (var x = lo.x; x <= hi.x; x++) {
-        // skip cells whose box is entirely outside the scan sphere (x and z are unwrapped here,
-        // so compare against my own position, shifted into the same image)
-        var myp = m.pos;
-        if (wrap) {
-          let full = half * 2.0;
-          myp.x -= full.x * floor((m.pos.x + half.x) / full.x);
-          myp.z -= full.z * floor((m.pos.z + half.z) / full.z);
-        }
+        // skip cells whose box is entirely outside the scan sphere (x is unwrapped here, so
+        // compare against my own canonical position)
         let cmin = vec3f(f32(x), f32(y), f32(z)) * cs - half;
         let dd = max(max(cmin - myp, myp - (cmin + vec3f(cs))), vec3f(0.0));
         if (dot(dd, dd) > scanR2) { continue; }
 
         let cx = select(x, wrapIdx(x, dims.x), wrap);
-        let cz = select(z, wrapIdx(z, dims.z), wrap);
-        let cell = u32((cz * dims.y + y) * dims.x + cx);
+        let cell = u32((z * dims.y + y) * dims.x + cx);
         for (var s = 0u; s < 3u; s++) {
           let key = cell * 3u + s;
           let start = cellStart[key];

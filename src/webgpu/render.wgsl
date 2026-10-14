@@ -1,9 +1,13 @@
 struct RU {
   viewProj: mat4x4f,
-  light: vec4f,   // xyz = direction to light
-  fog: vec4f,     // rgb = color, a = density
-  tank: vec4f,    // half extents xyz
+  light: vec4f,     // xyz = direction toward the sun
+  absorb: vec4f,    // rgb = extinction per unit (already scaled by murkiness)
+  tank: vec4f,      // half extents xyz; y is also the water surface height
   floorGrid: vec4f, // cols, rows, world span x, world span z
+  camRight: vec4f,  // xyz, a = tan(fov/2) * aspect
+  camUp: vec4f,     // xyz, a = tan(fov/2)
+  camFwd: vec4f,    // xyz
+  camPos: vec4f,    // xyz = camera world position
 };
 
 @group(0) @binding(0) var<uniform> R: RU;
@@ -17,8 +21,32 @@ struct VOut {
   @location(0) nrm: vec3f,
   @location(1) col: vec3f,
   @location(2) localY: f32,
-  @location(3) depth: f32,
+  @location(3) dist: f32,
+  @location(4) sun: vec3f,
+  @location(5) veil: vec3f,
 };
+
+// Light and veiling haze at a world height. Both vary smoothly, so they are computed per vertex
+// and interpolated; only the view-ray transmittance needs a per-pixel exp.
+struct DepthLight {
+  sun: vec3f,   // fraction of sunlight left at this depth, per channel
+  veil: vec3f,  // colour of the haze at this depth
+};
+
+fn depthLight(worldY: f32) -> DepthLight {
+  let depth = max(R.tank.y - worldY, 0.0);
+  var l: DepthLight;
+  l.sun = exp(-R.absorb.xyz * depth);
+  l.veil = WATER_SCATTER * exp(-R.absorb.xyz * depth * DEEP_FADE);
+  return l;
+}
+
+// Sunlight has already lost red first on its way down; the view ray loses more with distance,
+// and veiling light fills in what was absorbed.
+fn underwater(col: vec3f, sun: vec3f, veil: vec3f, dist: f32) -> vec3f {
+  let transmit = exp(-R.absorb.xyz * dist);
+  return col * sun * transmit + veil * (vec3f(1.0) - transmit);
+}
 
 @vertex
 fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) ii: u32) -> VOut {
@@ -45,7 +73,10 @@ fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) ii:
   o.nrm = fwd * n.x + up * n.y + side * n.z;
   o.col = SP[sp * 2u + 1u].rgb * (0.85 + 0.3 * h);
   o.localY = p.y;
-  o.depth = o.clip.w;
+  o.dist = distance(world, R.camPos.xyz);
+  let dl = depthLight(world.y);
+  o.sun = dl.sun;
+  o.veil = dl.veil;
   return o;
 }
 
@@ -57,9 +88,7 @@ fn fs(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
   let hemi = n.y * 0.5 + 0.5;
   var col = in.col * (0.3 + 0.4 * hemi + 0.55 * lambert);
   col = mix(col, col * 1.25 + vec3f(0.04), smoothstep(0.0, -0.15, in.localY));
-  let dens = R.fog.a;
-  let f = clamp(1.0 - exp(-dens * dens * in.depth * in.depth), 0.0, 1.0);
-  return vec4f(mix(col, R.fog.rgb, f), 1.0);
+  return vec4f(underwater(col, in.sun, in.veil, in.dist), 1.0);
 }
 
 // ---- sea floor --------------------------------------------------------------
@@ -67,7 +96,9 @@ fn fs(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
 struct FloorOut {
   @builtin(position) clip: vec4f,
   @location(0) wp: vec3f,
-  @location(1) depth: f32,
+  @location(1) dist: f32,
+  @location(2) sun: vec3f,
+  @location(3) veil: vec3f,
 };
 
 @vertex
@@ -88,7 +119,10 @@ fn vsFloor(@builtin(vertex_index) vi: u32) -> FloorOut {
   var o: FloorOut;
   o.wp = vec3f(xz.x, y, xz.y);
   o.clip = R.viewProj * vec4f(o.wp, 1.0);
-  o.depth = o.clip.w;
+  o.dist = distance(o.wp, R.camPos.xyz);
+  let dl = depthLight(y);
+  o.sun = dl.sun;
+  o.veil = dl.veil;
   return o;
 }
 
@@ -117,7 +151,7 @@ fn fsFloor(in: FloorOut) -> @location(0) vec4f {
   var n = normalize(vec3f(-(hx - h0) / e, 1.0, -(hz - h0) / e));
 
   // fine detail fades with distance so it doesn't shimmer
-  let detail = 1.0 - smoothstep(80.0, 260.0, in.depth);
+  let detail = 1.0 - smoothstep(80.0, 260.0, in.dist);
 
   // wind ripples: wavy ridges roughly perpendicular to (0.91, 0.41)
   let warp = vnoise(p * 0.12) * 6.0;
@@ -135,7 +169,42 @@ fn fsFloor(in: FloorOut) -> @location(0) vec4f {
 
   let lambert = max(dot(n, R.light.xyz), 0.0);
   let col = sand * (0.22 + 0.9 * lambert);
-  let dens = R.fog.a;
-  let f = clamp(1.0 - exp(-dens * dens * in.depth * in.depth), 0.0, 1.0);
-  return vec4f(mix(col, R.fog.rgb, f), 1.0);
+  return vec4f(underwater(col, in.sun, in.veil, in.dist), 1.0);
+}
+
+// ---- backdrop -----------------------------------------------------------------
+
+struct BgOut {
+  @builtin(position) clip: vec4f,
+  @location(0) ndc: vec2f,
+};
+
+@vertex
+fn vsBg(@builtin(vertex_index) vi: u32) -> BgOut {
+  // one oversized triangle covering the screen
+  var xy = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  var o: BgOut;
+  o.clip = vec4f(xy[vi], 0.0, 1.0);
+  o.ndc = xy[vi];
+  return o;
+}
+
+@fragment
+fn fsBg(in: BgOut) -> @location(0) vec4f {
+  let ray = normalize(
+    R.camFwd.xyz + in.ndc.x * R.camRight.xyz * R.camRight.w + in.ndc.y * R.camUp.xyz * R.camUp.w);
+  let sigma = R.absorb.xyz;
+  let camDepth = max(R.tank.y - R.camPos.y, 0.0);
+
+  // water colour at the camera: brighter looking toward the surface, darker toward the floor
+  let veil = WATER_SCATTER * exp(-sigma * camDepth * DEEP_FADE);
+  let toSurface = smoothstep(-0.05, 0.9, ray.y);
+  let toFloor = smoothstep(0.05, -0.85, ray.y);
+  var col = veil * (1.0 + 1.6 * toSurface) * (1.0 - 0.65 * toFloor);
+
+  // the sun seen through the water: a soft halo plus a tight core, tinted blue-green
+  let s = max(dot(ray, R.light.xyz), 0.0);
+  let glow = 0.35 * pow(s, 6.0) + 0.9 * pow(s, 80.0);
+  col += vec3f(0.55, 0.85, 0.95) * glow * exp(-sigma * camDepth) * smoothstep(0.0, 0.3, ray.y);
+  return vec4f(col, 1.0);
 }

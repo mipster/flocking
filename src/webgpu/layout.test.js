@@ -13,7 +13,7 @@ import {
 } from './layout.js';
 
 describe('packSimParams', () => {
-  const p = packSimParams({
+  const base = {
     dt: 0.016,
     time: 2,
     count: 1000,
@@ -23,7 +23,9 @@ describe('packSimParams', () => {
     cellSize: 8,
     dims: [30, 8, 20],
     wrap: true,
-  });
+    smoothing: 0,
+  };
+  const p = packSimParams(base);
 
   it('fills exactly four vec4s', () => {
     expect(p.length).toBe(SIM_PARAMS_FLOATS);
@@ -38,18 +40,18 @@ describe('packSimParams', () => {
   });
 
   it('encodes wrap off as 0', () => {
-    const q = packSimParams({
-      dt: 0,
-      time: 0,
-      count: 1,
-      maxPerCell: 1,
-      half: [1, 1, 1],
-      wallMargin: 1,
-      cellSize: 1,
-      dims: [1, 1, 1],
-      wrap: false,
-    });
-    expect(q[12]).toBe(0);
+    expect(packSimParams({ ...base, wrap: false })[12]).toBe(0);
+  });
+
+  it('sends a blend of 1 (no smoothing) when the time constant is 0', () => {
+    expect(p[13]).toBe(1);
+  });
+
+  it('converts the smoothing time constant into a per-step blend factor', () => {
+    const q = packSimParams({ ...base, smoothing: 0.1 });
+    expect(q[13]).toBeCloseTo(1 - Math.exp(-0.016 / 0.1), 6);
+    expect(q[13]).toBeGreaterThan(0);
+    expect(q[13]).toBeLessThan(1);
   });
 });
 
@@ -96,10 +98,17 @@ describe('packRenderUniforms', () => {
   const out = packRenderUniforms({
     viewProj: new Float32Array(16).fill(1),
     light: [0, 3, 4],
-    fogColor: [0.1, 0.2, 0.3],
-    fogDensity: 0.005,
+    absorption: [0.01, 0.002, 0.001],
     half: [120, 30, 80],
     floorGrid: [240, 160, 720, 480],
+    camera: {
+      right: [1, 0, 0],
+      up: [0, 1, 0],
+      forward: [0, 0, -1],
+      position: [5, 42, 9],
+      tanHalfX: 0.8,
+      tanHalfY: 0.5,
+    },
   });
 
   it('is the size render.wgsl expects', () => {
@@ -110,9 +119,21 @@ describe('packRenderUniforms', () => {
     expect(Array.from(out.slice(16, 19))).toEqual([0, expect.closeTo(0.6, 5), expect.closeTo(0.8, 5)]);
   });
 
-  it('places fog, tank and floor grid', () => {
-    expect(out[23]).toBeCloseTo(0.005);
+  it('places absorption, tank and floor grid', () => {
+    expect(Array.from(out.slice(20, 24))).toEqual([
+      expect.closeTo(0.01, 6),
+      expect.closeTo(0.002, 6),
+      expect.closeTo(0.001, 6),
+      0,
+    ]);
     expect(Array.from(out.slice(24, 27))).toEqual([120, 30, 80]);
     expect(Array.from(out.slice(28, 32))).toEqual([240, 160, 720, 480]);
+  });
+
+  it('places the camera basis, its field-of-view scales and its position', () => {
+    expect(Array.from(out.slice(32, 36))).toEqual([1, 0, 0, expect.closeTo(0.8, 6)]);
+    expect(Array.from(out.slice(36, 40))).toEqual([0, 1, 0, expect.closeTo(0.5, 6)]);
+    expect(Array.from(out.slice(40, 44))).toEqual([0, 0, -1, 0]);
+    expect(Array.from(out.slice(44, 48))).toEqual([5, 42, 9, 0]);
   });
 });

@@ -4,11 +4,11 @@ import { floorWGSL } from './floor.js';
 import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './layout.js';
 import {
   CAMERA,
-  DEFAULT_FOG_DENSITY,
+  DEFAULT_MURKINESS,
   FLOOR_MESH,
-  FOG_COLOR,
   LIGHT_DIRECTION,
   SPECIES_COUNT,
+  WATER,
   wgslHeader,
 } from './config.js';
 
@@ -70,8 +70,7 @@ export class FishRenderer {
     this.device = device;
     this.canvas = canvas;
     this.species = species;
-    this.fogColor = FOG_COLOR;
-    this.fogDensity = DEFAULT_FOG_DENSITY;
+    this.murkiness = DEFAULT_MURKINESS;
     // orbit camera
     this.yaw = 0;
     this.pitch = CAMERA.startPitch;
@@ -131,6 +130,20 @@ export class FishRenderer {
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
       multisample: { count: SAMPLES },
     });
+    // backdrop gradient, drawn first and never writing depth
+    this.bgPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsBg' },
+      fragment: { module, entryPoint: 'fsBg', targets: [{ format: this.format }] },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'always' },
+      multisample: { count: SAMPLES },
+    });
+    this.bgBindGroup = device.createBindGroup({
+      layout: this.bgPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
+    });
+
     this.floorBindGroup = device.createBindGroup({
       layout: this.floorPipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: this.ubo } }],
@@ -200,16 +213,27 @@ export class FishRenderer {
     const cols = Math.min(maxCells, Math.ceil(spanX / spacing));
     const rows = Math.min(maxCells, Math.ceil(spanZ / spacing));
 
+    // view basis comes straight from the view matrix rows (camera looks down -z)
+    const view = lookAt(eye, [0, 0, 0], [0, 1, 0]);
+    const tanHalfY = 1 / proj[5];
+
     device.queue.writeBuffer(
       this.ubo,
       0,
       packRenderUniforms({
-        viewProj: mul(proj, lookAt(eye, [0, 0, 0], [0, 1, 0])),
+        viewProj: mul(proj, view),
         light: LIGHT_DIRECTION,
-        fogColor: this.fogColor,
-        fogDensity: this.fogDensity,
+        absorption: WATER.absorption.map((a) => a * this.murkiness),
         half,
         floorGrid: [cols, rows, spanX, spanZ],
+        camera: {
+          right: [view[0], view[4], view[8]],
+          up: [view[1], view[5], view[9]],
+          forward: [-view[2], -view[6], -view[10]],
+          position: eye,
+          tanHalfX: tanHalfY * aspect,
+          tanHalfY,
+        },
       })
     );
 
@@ -219,7 +243,7 @@ export class FishRenderer {
         {
           view: this.colorTex.createView(),
           resolveTarget: this.ctx.getCurrentTexture().createView(),
-          clearValue: { r: this.fogColor[0], g: this.fogColor[1], b: this.fogColor[2], a: 1 },
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
           loadOp: 'clear',
           storeOp: 'discard',
         },
@@ -231,6 +255,9 @@ export class FishRenderer {
         depthStoreOp: 'discard',
       },
     });
+    pass.setPipeline(this.bgPipeline);
+    pass.setBindGroup(0, this.bgBindGroup);
+    pass.draw(3);
     pass.setPipeline(this.floorPipeline);
     pass.setBindGroup(0, this.floorBindGroup);
     pass.draw(cols * rows * 6);

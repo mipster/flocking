@@ -1,5 +1,6 @@
 import { SPECIES } from './species.js';
 import { getDevice, GpuBoids } from './webgpu/GpuBoids.js';
+import { DEFAULT_STEERING_SMOOTHING } from './webgpu/config.js';
 
 // side^2 fish; large share fixed at ~0.5%, medium ~2% so every run sees the same mix
 const SIDES = [64, 128, 256, 512, 1024];
@@ -34,7 +35,11 @@ async function timeBatches(stepFn, syncFn, budgetMs = 1500) {
 }
 
 async function benchWebGPU(n, device, mode, maxPerCell) {
-  const boids = new GpuBoids(device, SPECIES, countsFor(n), { mode, maxPerCell });
+  const boids = new GpuBoids(device, SPECIES, countsFor(n), {
+    mode,
+    maxPerCell,
+    smoothing: DEFAULT_STEERING_SMOOTHING,
+  });
   const ms = await timeBatches(
     () => boids.step(DT),
     () => boids.sync()
