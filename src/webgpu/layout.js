@@ -11,7 +11,7 @@ export const SIM_PARAMS_FLOATS = 16;
  *   a      = (delta, time, count, maxPerCell)
  *   bounds = (half.x, half.y, half.z, wallMargin)
  *   grid   = (cellSize, nx, ny, nz)
- *   flags  = (wrap, steering blend per step, 0, 0)
+ *   flags  = (wrap, steering blend per step, wave time in seconds, 0)
  */
 export function packSimParams({
   dt,
@@ -24,6 +24,7 @@ export function packSimParams({
   dims,
   wrap,
   smoothing,
+  waveTime,
 }) {
   // exponential low-pass: fraction of the new force blended in each step (1 = smoothing off)
   const blend = smoothing > 0 ? 1 - Math.exp(-dt / smoothing) : 1;
@@ -42,7 +43,7 @@ export function packSimParams({
     dims[2],
     wrap ? 1 : 0,
     blend,
-    0,
+    waveTime,
     0,
   ]);
 }
@@ -94,11 +95,11 @@ export function hexToRgb(hex) {
 /** Floats per species in the render `SP` array (2 x vec4f). */
 export const RENDER_SPECIES_STRIDE = 8;
 
-/** render.wgsl `SP`, per species: [scale, 0, 0, 0] then [r, g, b, 0]. */
+/** render.wgsl `SP`, per species: [scale, glint, 0, 0] then [r, g, b, 0]. */
 export function packRenderSpecies(species) {
   const out = new Float32Array(SPECIES_COUNT * RENDER_SPECIES_STRIDE);
   species.forEach((s, i) => {
-    out.set([s.scale, 0, 0, 0], i * RENDER_SPECIES_STRIDE);
+    out.set([s.scale, s.glint ?? 0, 0, 0], i * RENDER_SPECIES_STRIDE);
     out.set([...hexToRgb(s.color), 0], i * RENDER_SPECIES_STRIDE + 4);
   });
   return out;

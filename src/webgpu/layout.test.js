@@ -24,6 +24,7 @@ describe('packSimParams', () => {
     dims: [30, 8, 20],
     wrap: true,
     smoothing: 0,
+    waveTime: 12.5,
   };
   const p = packSimParams(base);
 
@@ -37,6 +38,7 @@ describe('packSimParams', () => {
     expect(Array.from(p.slice(4, 8))).toEqual([120, 30, 80, 10]); // bounds
     expect(Array.from(p.slice(8, 12))).toEqual([8, 30, 8, 20]); // grid
     expect(p[12]).toBe(1); // flags.x = wrap
+    expect(p[14]).toBe(12.5); // flags.z = wave time
   });
 
   it('encodes wrap off as 0', () => {
@@ -80,6 +82,7 @@ describe('packRenderSpecies', () => {
     expect(out.length).toBe(3 * RENDER_SPECIES_STRIDE);
     const [r, g, b] = hexToRgb(SPECIES[1].color);
     expect(out[RENDER_SPECIES_STRIDE]).toBeCloseTo(SPECIES[1].scale);
+    expect(out[RENDER_SPECIES_STRIDE + 1]).toBeCloseTo(SPECIES[1].glint);
     expect(Array.from(out.slice(RENDER_SPECIES_STRIDE + 4, RENDER_SPECIES_STRIDE + 7))).toEqual([
       expect.closeTo(r, 5),
       expect.closeTo(g, 5),

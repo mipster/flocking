@@ -7,7 +7,7 @@ struct Params {
   a: vec4f,      // delta, time, count, maxPerCell
   bounds: vec4f, // tank half extents xyz, wall margin
   grid: vec4f,   // cellSize, nx, ny, nz
-  flags: vec4f,  // x = wrap left/right (1) or soft side walls (0), y = steering blend per step (1 = no smoothing)
+  flags: vec4f,  // x = wrap left/right (1) or soft side walls (0), y = steering blend per step (1 = no smoothing), z = wave time (seconds)
 };
 
 fn wrapOn() -> bool { return P.flags.x > 0.5; }
@@ -44,7 +44,8 @@ fn minImage(d: vec3f) -> vec3f {
 @group(0) @binding(6) var<storage, read_write> cellCount: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read_write> cellStart: array<u32>;
 @group(0) @binding(8) var<storage, read_write> keyRank: array<vec2u>; // per fish: (bucket key, rank in bucket)
-@group(0) @binding(9) var<storage, read_write> smoothAccel: array<vec4f>; // low-passed steering force
+// xyz = low-passed steering force, w = caustic light multiplier at the fish (read by the renderer)
+@group(0) @binding(9) var<storage, read_write> smoothAccel: array<vec4f>;
 
 const TAU = 6.28318530718;
 
@@ -137,7 +138,9 @@ fn integrate(i: u32, m: Me, a: Acc) {
   let alpha = P.flags.y;
   if (alpha < 1.0) {
     force = mix(smoothAccel[i].xyz, force, alpha);
-    smoothAccel[i] = vec4f(force, 0.0);
+    smoothAccel[i].x = force.x;
+    smoothAccel[i].y = force.y;
+    smoothAccel[i].z = force.z;
   }
 
   // soft tank walls
@@ -175,6 +178,10 @@ fn integrate(i: u32, m: Me, a: Acc) {
 
   vel[i] = vec4f(v, phase);
   pos[i] = vec4f(np, f32(m.sp));
+
+  // sunlight focused by the waves at the fish: one evaluation per fish, not per vertex
+  let depth = max(h.y + WAVE_AMPLITUDE_TOTAL - np.y, 0.0);
+  smoothAccel[i].w = causticLight(np.xz, depth, P.flags.z);
 }
 
 fn pcg(x: u32) -> u32 {

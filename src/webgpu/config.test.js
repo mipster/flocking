@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { WAVES, WAVE_AMPLITUDE_TOTAL, wgslHeader, waveTable } from './config.js';
+import {
+  LIGHT_DIRECTION,
+  RIPPLES,
+  WAVES,
+  WAVE_AMPLITUDE_TOTAL,
+  sunTravelPerDepth,
+  wgslHeader,
+  waveTable,
+} from './config.js';
 
 describe('waveTable', () => {
   const table = waveTable();
 
   it('has one entry per wave with finite shader constants', () => {
-    expect(table).toHaveLength(WAVES.length);
+    expect(table).toHaveLength(WAVES.length + RIPPLES.length);
     for (const w of table) {
       for (const v of [...w.shape, ...w.dynamics]) expect(Number.isFinite(v)).toBe(true);
     }
@@ -26,9 +34,11 @@ describe('wgslHeader', () => {
   const header = wgslHeader();
 
   it('declares the wave tables with matching lengths', () => {
-    expect(header).toContain(`const WAVE_COUNT = ${WAVES.length}u;`);
-    expect(header).toContain(`array<vec4f, ${WAVES.length}>`);
-    expect(header).toContain(`array<vec2f, ${WAVES.length}>`);
+    const total = WAVES.length + RIPPLES.length;
+    expect(header).toContain(`const WAVE_COUNT = ${total}u;`);
+    expect(header).toContain(`const WAVE_MESH_COUNT = ${WAVES.length}u;`);
+    expect(header).toContain(`array<vec4f, ${total}>`);
+    expect(header).toContain(`array<vec2f, ${total}>`);
   });
 
   it('never emits NaN or undefined into the shader', () => {
@@ -37,5 +47,30 @@ describe('wgslHeader', () => {
 
   it('keeps the fish ceiling reachable: wave troughs stay above the tank top', () => {
     expect(WAVE_AMPLITUDE_TOTAL).toBeGreaterThan(0);
+  });
+});
+
+describe('sunTravelPerDepth', () => {
+  const [x, z] = sunTravelPerDepth();
+
+  it('points away from the sun, horizontally', () => {
+    expect(Math.sign(x)).toBe(-Math.sign(LIGHT_DIRECTION[0]));
+    expect(Math.sign(z)).toBe(-Math.sign(LIGHT_DIRECTION[2]));
+  });
+
+  it('bends toward vertical: refracted travel is shorter than in air', () => {
+    const air = Math.hypot(LIGHT_DIRECTION[0], LIGHT_DIRECTION[2]) / LIGHT_DIRECTION[1];
+    expect(Math.hypot(x, z)).toBeLessThan(air);
+    expect(Math.hypot(x, z)).toBeGreaterThan(0);
+  });
+});
+
+describe('mesh waves and ripples', () => {
+  it('lists mesh waves first and gives ripples no horizontal displacement', () => {
+    const table = waveTable();
+    table.forEach((w, i) => {
+      if (i < WAVES.length) expect(w.dynamics[1]).toBeGreaterThan(0);
+      else expect(w.dynamics[1]).toBe(0);
+    });
   });
 });

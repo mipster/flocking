@@ -16,6 +16,7 @@ export function addSpeciesFolders(gui, species) {
     f.add(s, 'huntRadius', 0, 60, 0.5);
     f.add(s, 'huntWeight', 0, 3, 0.05);
     f.add(s, 'wander', 0, 1, 0.01);
+    f.add(s, 'glint', 0, 3, 0.05).name('glint (sun sparkle)');
     f.close();
   }
 }

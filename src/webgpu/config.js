@@ -64,21 +64,70 @@ export const WAVES = [
   { direction: [-0.3, 1.0], amplitude: 0.3, wavelength: 31 },
   { direction: [-0.9, -0.4], amplitude: 0.2, wavelength: 19 },
 ];
+
+/**
+ * Fine ripples: too short for the 3-unit mesh, so they only shape normals and caustics (no
+ * displacement). Their headings are spread out and their focusing strength (amplitude * k^2) is
+ * similar, so the caustics form a web rather than parallel streaks.
+ */
+export const RIPPLES = [
+  { direction: [0.7, -0.7], amplitude: 0.12, wavelength: 14 },
+  { direction: [-0.5, 0.85], amplitude: 0.085, wavelength: 11 },
+  { direction: [0.95, 0.3], amplitude: 0.055, wavelength: 8.5 },
+  { direction: [-0.8, -0.6], amplitude: 0.042, wavelength: 7 },
+  { direction: [0.1, 1.0], amplitude: 0.03, wavelength: 5.5 },
+];
 export const WAVE_STEEPNESS = 0.6; // 0 = sine waves, 1 = pointed crests that just stop looping
 export const WAVE_AMPLITUDE_TOTAL = WAVES.reduce((sum, w) => sum + w.amplitude, 0);
 const GRAVITY = 9.81;
 
-/** Per-wave shader constants: [dirX, dirZ, amplitude, k] and [angular speed, horizontal steepness]. */
+/**
+ * Per-wave shader constants: [dirX, dirZ, amplitude, k] and [angular speed, horizontal steepness].
+ * Mesh waves come first, then ripples (which have zero horizontal steepness).
+ */
 export function waveTable() {
-  return WAVES.map((w) => {
+  const entry = (w, steepness) => {
     const len = Math.hypot(...w.direction);
     const k = (2 * Math.PI) / w.wavelength;
     return {
       shape: [w.direction[0] / len, w.direction[1] / len, w.amplitude, k],
-      dynamics: [Math.sqrt(GRAVITY * k), WAVE_STEEPNESS / (k * w.amplitude * WAVES.length)],
+      dynamics: [Math.sqrt(GRAVITY * k), steepness(k, w.amplitude)],
     };
-  });
+  };
+  return [
+    ...WAVES.map((w) => entry(w, (k, a) => WAVE_STEEPNESS / (k * a * WAVES.length))),
+    ...RIPPLES.map((w) => entry(w, () => 0)),
+  ];
 }
+const WAVE_TOTAL = WAVES.length + RIPPLES.length;
+
+/**
+ * Caustics: sunlight focused by the wave surface onto whatever is below it.
+ * - bend: how strongly a tilted wave facet deflects the refracted ray, per unit depth
+ * - fade: how fast the pattern washes out with depth (per unit)
+ * - base/gain: light = base + gain * focus, so un-focused areas stay lit and focus adds on top
+ * - minDeterminant: floor on the lens Jacobian so focus stays finite on the caustic lines
+ */
+export const CAUSTICS = { bend: 0.18, fade: 0.015, base: 0.4, gain: 0.4, minDeterminant: 0.25 };
+const WATER_REFRACTIVE_INDEX = 1.33;
+
+/** Horizontal distance the refracted sun ray travels per unit of depth, as (x, z). */
+export function sunTravelPerDepth() {
+  const [lx, ly, lz] = LIGHT_DIRECTION;
+  const horizontal = Math.hypot(lx, lz);
+  if (horizontal === 0) return [0, 0];
+  const sinIncident = horizontal / Math.hypot(horizontal, ly);
+  const sinRefracted = sinIncident / WATER_REFRACTIVE_INDEX;
+  const tanRefracted = sinRefracted / Math.sqrt(1 - sinRefracted * sinRefracted);
+  // light travels away from the sun, i.e. opposite to the direction toward it
+  return [(-lx / horizontal) * tanRefracted, (-lz / horizontal) * tanRefracted];
+}
+
+/**
+ * Sun glint on fish scales: a tight specular flash from the flanks, scaled per species by its
+ * `glint` setting. It rides on the fish's caustic-lit sunlight, so it pulses with the caustics.
+ */
+export const GLINT = { sharpness: 40, color: [1.0, 0.95, 0.8] };
 
 /** Multiplier on the absorption coefficients; the viewer exposes it as a slider. */
 export const DEFAULT_MURKINESS = 1;
@@ -97,8 +146,18 @@ const WATER_SCATTER = vec3f(${WATER.scatter.join(', ')});
 const CLEARANCE_BASE = ${CLEARANCE.base};
 const CLEARANCE_BELLY = ${CLEARANCE.belly};
 const CLEARANCE_FIN = ${CLEARANCE.fin};
-const WAVE_COUNT = ${WAVES.length}u;
-const WAVES = array<vec4f, ${WAVES.length}>(${table.map((w) => `vec4f(${w.shape.join(', ')})`).join(', ')});
-const WAVE_DYNAMICS = array<vec2f, ${WAVES.length}>(${table.map((w) => `vec2f(${w.dynamics.join(', ')})`).join(', ')});
+const WAVE_COUNT = ${WAVE_TOTAL}u;
+const WAVE_MESH_COUNT = ${WAVES.length}u;
+const WAVE_AMPLITUDE_TOTAL = ${WAVE_AMPLITUDE_TOTAL};
+const GLINT_SHARPNESS = ${GLINT.sharpness};
+const GLINT_COLOR = vec3f(${GLINT.color.join(', ')});
+const CAUSTIC_BEND = ${CAUSTICS.bend};
+const CAUSTIC_FADE = ${CAUSTICS.fade};
+const CAUSTIC_BASE = ${CAUSTICS.base};
+const CAUSTIC_GAIN = ${CAUSTICS.gain};
+const CAUSTIC_MIN_DET = ${CAUSTICS.minDeterminant};
+const SUN_TRAVEL = vec2f(${sunTravelPerDepth().join(', ')});
+const WAVES = array<vec4f, ${WAVE_TOTAL}>(${table.map((w) => `vec4f(${w.shape.join(', ')})`).join(', ')});
+const WAVE_DYNAMICS = array<vec2f, ${WAVE_TOTAL}>(${table.map((w) => `vec2f(${w.dynamics.join(', ')})`).join(', ')});
 `;
 }

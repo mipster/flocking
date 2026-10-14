@@ -18,6 +18,7 @@ export const SPECIES = [
     huntRadius: 0,
     huntWeight: 0,
     wander: 0.1,
+    glint: 1.0,
   },
   {
     name: 'Medium',
@@ -36,6 +37,7 @@ export const SPECIES = [
     huntRadius: 0,
     huntWeight: 0,
     wander: 0.15,
+    glint: 0.35,
   },
   {
     name: 'Large',
@@ -54,6 +56,7 @@ export const SPECIES = [
     huntRadius: 30,
     huntWeight: 0.4,
     wander: 0.5,
+    glint: 0.15,
   },
 ];
 

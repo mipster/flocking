@@ -1,5 +1,6 @@
 import renderWGSL from './render.wgsl?raw';
 import { buildFishVertices } from './fishGeometry.js';
+import { causticsWGSL } from './caustics.js';
 import { FLOOR, floorWGSL } from './floor.js';
 import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './layout.js';
 import {
@@ -99,7 +100,7 @@ export class FishRenderer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + renderWGSL });
+    const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + causticsWGSL + renderWGSL });
     module.getCompilationInfo().then((info) => {
       for (const m of info.messages) console.warn(`WGSL ${m.type} ${m.lineNum}:${m.linePos} ${m.message}`);
     });
@@ -204,7 +205,8 @@ export class FishRenderer {
     this.device.queue.writeBuffer(this.spBuf, 0, packRenderSpecies(this.species));
   }
 
-  render(boids) {
+  // `time` (seconds) drives the waves; pass the same value to boids.step() so fish light matches.
+  render(boids, time) {
     const { device } = this;
     if (this.boundFor !== boids) {
       this.bindGroup = device.createBindGroup({
@@ -214,6 +216,7 @@ export class FishRenderer {
           { binding: 1, resource: { buffer: boids.pos } },
           { binding: 2, resource: { buffer: boids.vel } },
           { binding: 3, resource: { buffer: this.spBuf } },
+          { binding: 4, resource: { buffer: boids.smoothAccel } },
         ],
       });
       this.boundFor = boids;
@@ -252,7 +255,7 @@ export class FishRenderer {
         absorption: WATER.absorption.map((a) => a * this.murkiness),
         half,
         surfaceY: half[1] + WAVE_AMPLITUDE_TOTAL,
-        time: performance.now() / 1000,
+        time,
         floorGrid: [cols, rows, spanX, spanZ],
         camera: {
           right: [view[0], view[4], view[8]],

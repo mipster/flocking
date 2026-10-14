@@ -147,8 +147,11 @@ async function main() {
     renderer.resize(Math.floor(window.innerWidth * dpr), Math.floor(window.innerHeight * dpr));
     renderer.murkiness = settings.murkiness;
     renderer.targetY = settings.lookHeight;
-    if (!settings.paused) boids.step(dt * settings.speed);
-    renderer.render(boids);
+    // one wave clock for both, so the light on the fish matches the water above them; stepping
+    // with dt 0 while paused keeps that light animating
+    const waveTime = now / 1000;
+    boids.step(settings.paused ? 0 : dt * settings.speed, waveTime);
+    renderer.render(boids, waveTime);
 
     busy = true;
     const t0 = performance.now();

@@ -1,4 +1,5 @@
 import simWGSL from './sim.wgsl?raw';
+import { causticsWGSL } from './caustics.js';
 import { floorWGSL } from './floor.js';
 import {
   DEFAULT_STEERING_SMOOTHING,
@@ -74,7 +75,7 @@ export class GpuBoids {
     this.cellCount = mk(this.keys * 4, S);
     this.cellStart = mk((this.keys + 1) * 4, S);
     this.keyRank = mk(n * 8, S);
-    this.smoothAccel = mk(n * 16, S);
+    this.smoothAccel = mk(n * 16, S | GPUBufferUsage.COPY_SRC);
     this.params = mk(SIM_PARAMS_FLOATS * 4, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.specBuf = mk(
       SPECIES_COUNT * SIM_SPECIES_STRIDE * 4,
@@ -83,7 +84,7 @@ export class GpuBoids {
 
     this.upload(counts);
 
-    const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + simWGSL });
+    const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + causticsWGSL + simWGSL });
     module.getCompilationInfo().then((info) => {
       for (const m of info.messages) console.warn(`WGSL ${m.type} ${m.lineNum}:${m.linePos} ${m.message}`);
     });
@@ -152,7 +153,8 @@ export class GpuBoids {
   }
 
   // Encodes one simulation step. Returns nothing; call sync() to wait for the GPU.
-  step(dt) {
+  // `waveTime` (seconds) is the surface-wave clock the renderer uses, so fish light matches the water.
+  step(dt, waveTime = 0) {
     this.time += dt;
     const q = this.device.queue;
     this.syncSpecies();
@@ -170,6 +172,7 @@ export class GpuBoids {
         dims: this.dims,
         wrap: this.wrap,
         smoothing: this.smoothing,
+        waveTime,
       })
     );
 

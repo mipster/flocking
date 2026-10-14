@@ -13,8 +13,10 @@ struct RU {
 @group(0) @binding(0) var<uniform> R: RU;
 @group(0) @binding(1) var<storage, read> pos: array<vec4f>;
 @group(0) @binding(2) var<storage, read> vel: array<vec4f>;
-// per species: [scale, 0, 0, 0], [r, g, b, 0]
+// per species: [scale, glint, 0, 0], [r, g, b, 0]
 @group(0) @binding(3) var<uniform> SP: array<vec4f, 6>;
+// per fish: xyz = smoothed steering force (unused here), w = caustic light multiplier at the fish
+@group(0) @binding(4) var<storage, read> fishState: array<vec4f>;
 
 struct VOut {
   @builtin(position) clip: vec4f,
@@ -24,6 +26,8 @@ struct VOut {
   @location(3) dist: f32,
   @location(4) sun: vec3f,
   @location(5) veil: vec3f,
+  @location(6) worldPos: vec3f,
+  @location(7) glint: f32,
 };
 
 // Light and veiling haze at a world height. Both vary smoothly, so they are computed per vertex
@@ -75,8 +79,10 @@ fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) ii:
   o.localY = p.y;
   o.dist = distance(world, R.camPos.xyz);
   let dl = depthLight(world.y);
-  o.sun = dl.sun;
+  o.sun = dl.sun * fishState[ii].w;
   o.veil = dl.veil;
+  o.worldPos = world;
+  o.glint = SP[sp * 2u].y;
   return o;
 }
 
@@ -88,6 +94,14 @@ fn fs(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
   let hemi = n.y * 0.5 + 0.5;
   var col = in.col * (0.3 + 0.4 * hemi + 0.55 * lambert);
   col = mix(col, col * 1.25 + vec3f(0.04), smoothstep(0.0, -0.15, in.localY));
+
+  // sun glint: a facet flashes when its normal lines up with the half vector between sun and eye.
+  // It is added to the colour before the sunlight factor, so caustic focus lifts it too.
+  let toEye = normalize(R.camPos.xyz - in.worldPos);
+  let half = normalize(R.light.xyz + toEye);
+  let spec = pow(max(dot(n, half), 0.0), GLINT_SHARPNESS);
+  col += GLINT_COLOR * spec * in.glint;
+
   return vec4f(underwater(col, in.sun, in.veil, in.dist), 1.0);
 }
 
@@ -175,7 +189,7 @@ fn fsFloor(in: FloorOut) -> @location(0) vec4f {
 
   let lambert = max(dot(n, R.light.xyz), 0.0);
   let col = sand * (0.22 + 0.9 * lambert);
-  return vec4f(underwater(col, in.sun, in.veil, in.dist), 1.0);
+  return vec4f(underwater(col, in.sun * causticLight(in.wp.xz, max(R.tank.w - in.wp.y, 0.0), R.camPos.w), in.veil, in.dist), 1.0);
 }
 
 // ---- backdrop -----------------------------------------------------------------
@@ -225,17 +239,11 @@ fn fsBg(in: BgOut) -> @location(0) vec4f {
 
 // ---- water surface -----------------------------------------------------------
 
-// Phase of wave `i` at rest position `xz`; shared by the displacement and the normal.
-fn wavePhase(i: u32, xz: vec2f, t: f32) -> f32 {
-  let w = WAVES[i];
-  return w.w * dot(w.xy, xz) - WAVE_DYNAMICS[i].x * t;
-}
-
 // Gerstner waves: each crest moves points horizontally as well as vertically, which sharpens
 // crests and flattens troughs. Returns the (dx, dy, dz) displacement of rest position `xz`.
 fn waveDisplace(xz: vec2f, t: f32) -> vec3f {
   var d = vec3f(0.0);
-  for (var i = 0u; i < WAVE_COUNT; i++) {
+  for (var i = 0u; i < WAVE_MESH_COUNT; i++) {
     let w = WAVES[i];
     let phase = wavePhase(i, xz, t);
     let c = cos(phase);
