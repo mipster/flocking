@@ -24,6 +24,9 @@ struct RU {
 // light shafts: the half-size shaft image the composite pass adds on top of the frame
 @group(0) @binding(11) var shaftTex: texture_2d<f32>;
 @group(0) @binding(12) var shaftSampler: sampler;
+// marine snow: per-speck placement and look written by snowPrep (compute) and read by vsSnow
+@group(0) @binding(13) var<storage, read> snow: array<vec4f>;
+@group(0) @binding(14) var<storage, read_write> snowOut: array<vec4f>;
 // fishShade (compute) only: writable views of the same data, bound with `pos`, SP and the uniforms
 @group(0) @binding(5) var<storage, read_write> shadeOut: array<vec4f>;
 @group(0) @binding(7) var<storage, read_write> visibleSimpleOut: array<u32>;
@@ -120,7 +123,7 @@ fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) ii:
   let up = cross(side, fwd);
 
   var l = p;
-  let w = clamp((0.1 - l.x) / 0.7, 0.0, 1.0);
+  let w = clamp((FISH_TAIL_START - l.x) / FISH_TAIL_LENGTH, 0.0, 1.0);
   l.z += sin(vw.w - l.x * TAIL_K) * TAIL_AMP * w * w;
 
   let world = pw.xyz + (fwd * l.x + up * l.y + side * l.z) * scale;
@@ -129,7 +132,7 @@ fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) ii:
   var o: VOut;
   o.clip = R.viewProj * vec4f(world, 1.0);
   o.nrm = fwd * n.x + up * n.y + side * n.z;
-  o.col = SP[sp * 2u + 1u].rgb * (0.85 + 0.3 * s0.w);
+  o.col = SP[sp * 2u + 1u].rgb * (FISH_TINT_BASE + FISH_TINT_RANGE * s0.w);
   o.localY = p.y;
   o.dist = distance(world, R.camPos.xyz);
   o.sun = s0.rgb;
@@ -145,8 +148,8 @@ fn fs(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
   if (!front) { n = -n; }
   let lambert = max(dot(n, R.light.xyz), 0.0);
   let hemi = n.y * 0.5 + 0.5;
-  var col = in.col * (0.3 + 0.4 * hemi + 0.55 * lambert);
-  col = mix(col, col * 1.25 + vec3f(0.04), smoothstep(0.0, -0.15, in.localY));
+  var col = in.col * (FISH_AMBIENT + FISH_HEMISPHERE * hemi + FISH_DIFFUSE * lambert);
+  col = mix(col, col * FISH_BELLY_LIFT + vec3f(FISH_BELLY_FLOOR), smoothstep(0.0, -FISH_BELLY_FADE, in.localY));
 
   // sun glint: a facet flashes when its normal lines up with the half vector between sun and eye.
   // It is added to the colour before the sunlight factor, so caustic focus lifts it too.
@@ -227,31 +230,32 @@ fn floorCaustic(wp: vec3f) -> f32 {
 fn fsFloor(in: FloorOut) -> @location(0) vec4f {
   let half = R.tank.xyz;
   let p = in.wp.xz;
-  let e = 0.6;
+  let e = SAND_NORMAL_STEP;
   let h0 = floorY(p, half);
   let hx = floorY(p + vec2f(e, 0.0), half);
   let hz = floorY(p + vec2f(0.0, e), half);
   var n = normalize(vec3f(-(hx - h0) / e, 1.0, -(hz - h0) / e));
 
   // fine detail fades with distance so it doesn't shimmer
-  let detail = 1.0 - smoothstep(80.0, 260.0, in.dist);
+  let detail = 1.0 - smoothstep(SAND_DETAIL_NEAR, SAND_DETAIL_FAR, in.dist);
 
-  // wind ripples: wavy ridges roughly perpendicular to (0.91, 0.41)
-  let warp = vnoise(p * 0.12) * 6.0;
-  let rp = (p.x * 0.9 + p.y * 0.4 + warp) * 1.6;
+  // wind ripples: wavy ridges perpendicular to the ripple direction, warped by noise
+  let warp = vnoise(p * SAND_RIPPLE_WARP_SCALE) * SAND_RIPPLE_WARP;
+  let rp = (dot(p, SAND_RIPPLE_DIRECTION) + warp) * SAND_RIPPLE_FREQUENCY;
   let ripple = sin(rp);
-  n = normalize(n + vec3f(0.914, 0.0, 0.406) * cos(rp) * 0.14 * detail);
+  let rippleDir = normalize(SAND_RIPPLE_DIRECTION);
+  n = normalize(n + vec3f(rippleDir.x, 0.0, rippleDir.y) * cos(rp) * SAND_RIPPLE_TILT * detail);
 
   // sand grain at three scales
-  let g1 = vnoise(p * 0.8);
-  let g2 = mix(0.5, vnoise(p * 9.0), detail);
-  let g3 = mix(0.5, hash2(floor(p * 40.0)), detail);
-  var sand = mix(vec3f(0.60, 0.50, 0.33), vec3f(0.90, 0.82, 0.62), g1 * 0.5 + g2 * 0.5);
-  sand *= 0.86 + 0.28 * g3;
-  sand *= 0.92 + 0.08 * ripple * detail;
+  let g1 = vnoise(p * SAND_GRAIN_SCALES.x);
+  let g2 = mix(0.5, vnoise(p * SAND_GRAIN_SCALES.y), detail);
+  let g3 = mix(0.5, hash2(floor(p * SAND_GRAIN_SCALES.z)), detail);
+  var sand = mix(SAND_DARK, SAND_LIGHT, g1 * 0.5 + g2 * 0.5);
+  sand *= (1.0 - 0.5 * SAND_GRAIN_SHADE) + SAND_GRAIN_SHADE * g3;
+  sand *= (1.0 - SAND_RIPPLE_SHADE) + SAND_RIPPLE_SHADE * ripple * detail;
 
   let lambert = max(dot(n, R.light.xyz), 0.0);
-  let col = sand * (0.22 + 0.9 * lambert);
+  let col = sand * (SAND_AMBIENT + SAND_DIFFUSE * lambert);
   return vec4f(underwater(col, in.sun * floorCaustic(in.wp), in.veil, in.dist), 1.0);
 }
 
@@ -341,11 +345,14 @@ struct SnowOut {
   @location(2) alpha: f32,
 };
 
-// One camera-facing quad per speck (6 vertices per instance). Its place is a function of its index
-// and the time only: a fixed point in the world that sinks and sways, wrapped into a box around
-// the camera so there are always specks nearby however far the camera travels.
-@vertex
-fn vsSnow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SnowOut {
+// Per-speck work, once per speck and frame instead of once per quad vertex. A speck's place is a
+// function of its index and the time only: a fixed point in the world that sinks and sways,
+// wrapped into a box around the camera so there are always specks nearby however far the camera
+// travels. Writes [world position xyz, half-size] and [colour rgb, opacity] (opacity 0 = hidden).
+@compute @workgroup_size(WORKGROUP_SIZE)
+fn snowPrep(@builtin(global_invocation_id) gid: vec3u) {
+  let ii = gid.x;
+  if (ii * 2u + 1u >= arrayLength(&snowOut)) { return; }
   let t = R.camPos.w;
   let seed = vec3f(snowHash(ii, 0.0), snowHash(ii, 1.0), snowHash(ii, 2.0));
   let speed = SNOW_FALL * (0.4 + 1.2 * snowHash(ii, 3.0));
@@ -356,42 +363,52 @@ fn vsSnow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> S
   p = cam + (fract((p - cam) / SNOW_BOX + 0.5) - 0.5) * SNOW_BOX;
   let phase = seed * 6.2831853 * 7.0;
   let rate = 0.6 + 0.8 * vec3f(snowHash(ii, 6.0), snowHash(ii, 7.0), snowHash(ii, 8.0));
-  p += SNOW_SWAY * sin(t * 0.17 * rate + phase) * vec3f(1.0, 0.0, 1.0);
+  p += SNOW_SWAY * sin(t * SNOW_SWAY_RATE * rate + phase) * vec3f(1.0, 0.0, 1.0);
   // waves move water in circles that shrink with depth, so specks near the surface also bob
   let bobDepth = max(R.tank.w - p.y, 0.0);
-  p.y += SNOW_BOB * exp(-bobDepth * 0.05) * sin(t * 0.9 * rate.y + phase.y);
+  p.y += SNOW_BOB * exp(-bobDepth * SNOW_BOB_FADE) * sin(t * SNOW_BOB_RATE * rate.y + phase.y);
 
-  var o: SnowOut;
   // specks above the water or inside the sand are not drawn
   if (p.y > R.tank.w || p.y < floorY(p.xz, R.tank.xyz)) {
-    o.clip = vec4f(0.0, 0.0, -2.0, 1.0);
-    o.uv = vec2f(0.0);
-    o.col = vec3f(0.0);
-    o.alpha = 0.0;
-    return o;
+    snowOut[ii * 2u + 1u] = vec4f(0.0);
+    return;
   }
 
-  var corners = array<vec2f, 6>(
-    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
-    vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
-  let c = corners[vi];
   let dist = distance(p, cam);
   let size = SNOW_SIZE * (0.5 + snowHash(ii, 4.0));
   // far specks would shrink below a pixel and shimmer, so keep a minimum angular size and give the
   // lost area back as lower opacity
   let wide = max(size, SNOW_MIN_ANGLE * dist);
-  let world = p + (R.camRight.xyz * c.x + R.camUp.xyz * c.y) * wide;
 
   let dl = depthLight(p.y);
   let depth = max(R.tank.w - p.y, 0.0);
   let focus = shaftFocus(p.xz, depth, R.waves.w);
   let beam = 1.0 + SNOW_BEAM * clamp(focus - 1.0, 0.0, 2.0);
-  let base = vec3f(0.85, 0.92, 0.95) * SNOW_BRIGHTNESS * (0.4 + 0.6 * snowHash(ii, 5.0)) * beam;
+  let base = SNOW_COLOR * SNOW_BRIGHTNESS * (0.4 + 0.6 * snowHash(ii, 5.0)) * beam;
 
-  o.clip = R.viewProj * vec4f(world, 1.0);
+  snowOut[ii * 2u] = vec4f(p, wide);
+  snowOut[ii * 2u + 1u] = vec4f(underwater(base, dl.sun, dl.veil, dist), SNOW_OPACITY * sqrt(size / wide));
+}
+
+// One camera-facing quad per speck (6 vertices per instance), placed from snowPrep's output.
+@vertex
+fn vsSnow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SnowOut {
+  let place = snow[ii * 2u];
+  let look = snow[ii * 2u + 1u];
+  var o: SnowOut;
+  o.uv = vec2f(0.0);
+  o.col = look.rgb;
+  o.alpha = look.a;
+  if (look.a <= 0.0) {
+    o.clip = vec4f(0.0, 0.0, -2.0, 1.0); // outside the clip volume: culled
+    return o;
+  }
+  var corners = array<vec2f, 6>(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+    vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+  let c = corners[vi];
+  o.clip = R.viewProj * vec4f(place.xyz + (R.camRight.xyz * c.x + R.camUp.xyz * c.y) * place.w, 1.0);
   o.uv = c;
-  o.col = underwater(base, dl.sun, dl.veil, dist);
-  o.alpha = 0.85 * sqrt(size / wide);
   return o;
 }
 
@@ -433,9 +450,9 @@ fn vsBg(@builtin(vertex_index) vi: u32) -> BgOut {
 // darker toward the floor. Also stands in for the mirror-like underside of the surface.
 fn waterColor(ray: vec3f) -> vec3f {
   let veil = depthLight(R.camPos.y).veil;
-  let toSurface = smoothstep(-0.05, 0.9, ray.y);
-  let toFloor = smoothstep(0.05, -0.85, ray.y);
-  return veil * (1.0 + 1.6 * toSurface) * (1.0 - 0.65 * toFloor);
+  let toSurface = smoothstep(BACKDROP_SURFACE_FROM, BACKDROP_SURFACE_TO, ray.y);
+  let toFloor = smoothstep(BACKDROP_FLOOR_FROM, BACKDROP_FLOOR_TO, ray.y);
+  return veil * (1.0 + BACKDROP_SURFACE_BOOST * toSurface) * (1.0 - BACKDROP_FLOOR_DIM * toFloor);
 }
 
 @fragment
@@ -452,8 +469,8 @@ fn fsBg(in: BgOut) -> @location(0) vec4f {
 
   // the sun seen through the water: a soft halo plus a tight core, tinted blue-green
   let s = max(dot(ray, R.light.xyz), 0.0);
-  let glow = 0.35 * pow(s, 6.0) + 0.9 * pow(s, 80.0);
-  col += vec3f(0.55, 0.85, 0.95) * glow * exp(-sigma * camDepth) * smoothstep(0.0, 0.3, ray.y);
+  let glow = BACKDROP_SUN_HALO * pow(s, BACKDROP_SUN_HALO_POWER) + BACKDROP_SUN_CORE * pow(s, BACKDROP_SUN_CORE_POWER);
+  col += BACKDROP_SUN_COLOR * glow * exp(-sigma * camDepth) * smoothstep(0.0, BACKDROP_SUN_RISE, ray.y);
   return vec4f(col, 1.0);
 }
 
@@ -492,10 +509,10 @@ fn waveNormal(xz: vec2f, t: f32) -> vec3f {
 // the sky as seen from underneath or reflected: pale at the horizon, deeper blue overhead, sun disc
 fn skyColor(dir: vec3f) -> vec3f {
   let up = clamp(dir.y, 0.0, 1.0);
-  let base = mix(vec3f(0.72, 0.82, 0.92), vec3f(0.10, 0.32, 0.70), pow(up, 0.5));
+  let base = mix(SKY_HORIZON, SKY_ZENITH, pow(up, SKY_ZENITH_POWER));
   let s = max(dot(dir, R.light.xyz), 0.0);
-  let sun = pow(s, 600.0) * 12.0 + pow(s, 24.0) * 0.35;
-  return base + vec3f(1.0, 0.94, 0.8) * sun;
+  let sun = pow(s, SKY_SUN_DISC_POWER) * SKY_SUN_DISC + pow(s, SKY_SUN_HALO_POWER) * SKY_SUN_HALO;
+  return base + SKY_SUN_COLOR * sun;
 }
 
 struct SurfaceOut {
@@ -520,7 +537,7 @@ fn vsSurface(@builtin(vertex_index) vi: u32) -> SurfaceOut {
 }
 
 fn fresnel(cosTheta: f32) -> f32 {
-  return 0.02 + 0.98 * pow(1.0 - clamp(cosTheta, 0.0, 1.0), 5.0);
+  return FRESNEL_F0 + (1.0 - FRESNEL_F0) * pow(1.0 - clamp(cosTheta, 0.0, 1.0), 5.0);
 }
 
 @fragment

@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { TANK_HALF } from '../species.js';
 import {
+  CELL_SIZE,
   LIGHT_DIRECTION,
   RIPPLES,
   SHAFTS,
+  SPECIES_COUNT,
+  TANK_LIMITS,
   WAVES,
   WAVE_AMPLITUDE_TOTAL,
   sunTravelPerDepth,
+  vecConsts,
   wgslHeader,
   waveTable,
 } from './config.js';
@@ -61,6 +66,22 @@ describe('wgslHeader', () => {
   });
 });
 
+describe('TANK_LIMITS', () => {
+  it('bounds the grid size so the single-thread prefix sum stays small', () => {
+    const cells =
+      Math.ceil(TANK_LIMITS.maxWidth / CELL_SIZE) *
+      Math.ceil((2 * TANK_HALF[1]) / CELL_SIZE) *
+      Math.ceil(TANK_LIMITS.maxDepth / CELL_SIZE);
+    expect(cells * SPECIES_COUNT).toBeLessThanOrEqual(65536);
+  });
+
+  it('keeps the default tank inside the limits', () => {
+    expect(2 * TANK_HALF[0]).toBeGreaterThanOrEqual(TANK_LIMITS.min);
+    expect(2 * TANK_HALF[0]).toBeLessThanOrEqual(TANK_LIMITS.maxWidth);
+    expect(2 * TANK_HALF[2]).toBeLessThanOrEqual(TANK_LIMITS.maxDepth);
+  });
+});
+
 describe('sunTravelPerDepth', () => {
   const [x, z] = sunTravelPerDepth();
 
@@ -92,5 +113,21 @@ describe('mesh waves and ripples', () => {
       if (i < WAVES.length) expect(w.dynamics[1]).toBeGreaterThan(0);
       else expect(w.dynamics[1]).toBe(0);
     });
+  });
+});
+
+describe('vecConsts', () => {
+  it('emits floats, vectors and snake-case names', () => {
+    const out = vecConsts('SAND', { rippleTilt: 0.14, dark: [0.6, 0.5, 0.33], direction: [0.9, 0.4] });
+    expect(out).toContain('const SAND_RIPPLE_TILT = 0.14;');
+    expect(out).toContain('const SAND_DARK = vec3f(0.6, 0.5, 0.33);');
+    expect(out).toContain('const SAND_DIRECTION = vec2f(0.9, 0.4);');
+  });
+
+  it('injects every look setting the shaders use', () => {
+    const header = wgslHeader();
+    for (const name of ['FISH_AMBIENT', 'SAND_DARK', 'BACKDROP_SUN_CORE', 'SKY_ZENITH', 'FRESNEL_F0']) {
+      expect(header).toContain(`const ${name} =`);
+    }
   });
 });

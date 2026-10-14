@@ -14,6 +14,7 @@ import {
   DEFAULT_WAVES,
   DEFAULT_STEERING_SMOOTHING,
   FRAMES_IN_FLIGHT,
+  TANK_LIMITS,
 } from './config.js';
 import { DEFAULT_PRESET, PRESETS, PRESET_KEYS, PRESET_RANGES, applyPreset } from './presets.js';
 
@@ -122,8 +123,12 @@ async function main() {
     .onChange((v) => {
       boids.wrap = v === 'wrap';
     });
-  g.add(settings, 'tankWidth', 80, 800, 10).name('tank width').onFinishChange(rebuild);
-  g.add(settings, 'tankDepth', 80, 800, 10).name('tank depth').onFinishChange(rebuild);
+  g.add(settings, 'tankWidth', TANK_LIMITS.min, TANK_LIMITS.maxWidth, 10)
+    .name('tank width')
+    .onFinishChange(rebuild);
+  g.add(settings, 'tankDepth', TANK_LIMITS.min, TANK_LIMITS.maxDepth, 10)
+    .name('tank depth')
+    .onFinishChange(rebuild);
   g.add(settings, 'smoothing', 0, 0.5, 0.01)
     .name('steering smoothing (s)')
     .onChange((v) => {

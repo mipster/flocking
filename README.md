@@ -13,8 +13,25 @@ Then open http://localhost:5173. A production build is available with `npm run b
 
 Requires a browser with WebGPU (Chrome, Edge or Brave 113+ on macOS, Windows and ChromeOS) and Node 20.19 or newer (22.12+ also works) to run the dev server.
 
-- **Viewer** (`/`): the flock. Fish count (16k to 2M), neighbor mode (spatial grid or brute force), samples per cell, left/right edges (wrap around or soft walls), tank width and depth, and exact medium and large fish counts are in the panel.
+- **Viewer** (`/`): the flock. Fish count (16k to 2M), neighbor mode (spatial grid or brute force), samples per cell, left/right edges (wrap around or soft walls), tank width and depth (80 to 400, which bounds the grid's single-thread prefix sum), and exact medium and large fish counts are in the panel.
 - **Benchmark** (`/bench.html`): times simulation steps for WebGPU brute force and the grid at 4k to 1M fish. Keep the tab visible while it runs, because a hidden tab can skip GPU work and give bogus numbers.
+
+## Benchmark baseline
+
+Simulation step time (compute only, no rendering) from `/bench.html`, in milliseconds per step; lower is better.
+Measured 2026-10-14 on an early M1 MacBook Pro in Brave (Chromium 148), plugged in, tab visible.
+
+| ms / step                     | 4,096 | 16,384 | 65,536 | 262,144 | 1,048,576 |
+| ----------------------------- | ----: | -----: | -----: | ------: | --------: |
+| WebGPU brute force            |  1.28 |   8.86 |  100.3 |  1534.7 |   skipped |
+| WebGPU grid (4 samples/cell)  |  2.57 |   3.59 |   7.62 |    29.9 |     137.3 |
+| WebGPU grid (8 samples/cell)  |  2.81 |   4.36 |   10.7 |    43.6 |     216.5 |
+| WebGPU grid (32 samples/cell) |  3.51 |   7.85 |   25.7 |   111.2 |     530.3 |
+
+The viewer's default is the grid at 8 samples per cell. Re-run the benchmark after any change to the
+simulation (`sim.wgsl`, `GpuBoids.js`) and treat a slowdown of more than about 20% in the grid rows as
+a regression to explain. Small counts are dominated by fixed per-step overhead, so judge the
+65,536 and larger columns.
 
 ## Development
 
@@ -65,7 +82,7 @@ Three species, each with its own speed, force limit and flocking weights:
 - **Surface**: Gerstner waves, drawn translucent. From above you see through it with a Fresnel sky and sun reflection; from below you see the sky through Snell's window, and a mirror of the water beyond the critical angle. **camera looks at height** tilts the view up at it.
 - **Caustics**: sunlight focused by the waves (the mesh waves plus fine ripples too short to mesh) is analytic per pixel: the surface acts as a lens, and light at a point is `1 / |det(I + bend * depth * Hessian(height))|`. It dapples the sand and, evaluated once per fish in a small compute pass before drawing, the fish; it washes out with depth.
 - **Light shafts**: each view ray is marched at half resolution until it reaches the range limit, the surface or the sea floor, accumulating sunlight scattered toward the eye. The sunlight at each sample is modulated by the same wave focusing as the caustics, so the beams sway with the waves, and the haze is brighter looking toward the sun. It is added on top of the finished frame; the **light shafts** slider scales it (0 skips the passes).
-- **Marine snow**: ~24k drifting specks, placed analytically in the vertex shader (a function of index and time, so no simulation or buffers) inside a box that follows the camera. They sink, wander and bob under the waves, are lit and hazed like everything else, and brighten in beams. The **marine snow** slider scales the count.
+- **Marine snow**: ~24k drifting specks, placed analytically by a small compute pass each frame (a function of index and time, so no simulation state) inside a box that follows the camera. They sink, wander and bob under the waves, are lit and hazed like everything else, and brighten in beams. The **marine snow** slider scales the count.
 - **Patchy haze**: the density the shafts scatter varies slowly in 3D noise and drifts, so beams look uneven (`HAZE` in `config.js`).
 - **Vignette**: a final full-screen pass multiplies the frame by a factor that falls toward the corners (`VIGNETTE` in `config.js`); the **vignette** slider scales it, and 0 skips the pass.
 - **Glint**: small fish flash a tight sun specular off their flanks as they cross the light (per-species **glint** slider; it rides on the caustic-lit sunlight, so it pulses with the caustics).
@@ -76,7 +93,7 @@ Three species, each with its own speed, force limit and flocking weights:
 index.html, bench.html
 src/species.js               species definitions, defaults and tank size
 src/gui.js                   species parameter panels
-src/webgpu/config.js         engine tuning constants (one place)
+src/webgpu/config.js         engine tuning constants (one place, including the look: fish, sand, backdrop, sky)
 src/webgpu/presets.js        water-look presets (named bundles of slider values)
 src/webgpu/layout.js         uniform buffer packing with named fields
 src/webgpu/floor.js          sea floor height (JS reference + generated WGSL)

@@ -15,6 +15,7 @@ import {
   LIGHT_DIRECTION,
   SHAFTS,
   SNOW,
+  SNOW_AMOUNT_MAX,
   SPECIES_COUNT,
   WORKGROUP_SIZE,
   WATER,
@@ -199,9 +200,28 @@ export class FishRenderer {
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
       multisample: { count: this.samples },
     });
+    // two vec4s per speck, sized for the largest slider value
+    this.snowBuf = device.createBuffer({
+      size: Math.ceil(SNOW.count * SNOW_AMOUNT_MAX) * 32,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, // COPY_SRC: ?debug readback
+    });
     this.snowBindGroup = device.createBindGroup({
       layout: this.snowPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
+      entries: [
+        { binding: 0, resource: { buffer: this.ubo } },
+        { binding: 13, resource: { buffer: this.snowBuf } },
+      ],
+    });
+    this.snowPrepPipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module, entryPoint: 'snowPrep' },
+    });
+    this.snowPrepBindGroup = device.createBindGroup({
+      layout: this.snowPrepPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.ubo } },
+        { binding: 14, resource: { buffer: this.snowBuf } },
+      ],
     });
     this.surfaceBindGroup = device.createBindGroup({
       layout: this.surfacePipeline.getBindGroupLayout(0),
@@ -443,6 +463,15 @@ export class FishRenderer {
       compute.dispatchWorkgroups(Math.ceil(boids.count / WORKGROUP_SIZE));
       compute.end();
     }
+    const snowCount = Math.min(Math.round(SNOW.count * this.snowAmount), SNOW.count * SNOW_AMOUNT_MAX);
+    const drawSnow = this.layers.snow && snowCount > 0 && eye[1] < surfaceY;
+    if (drawSnow) {
+      const prep = enc.beginComputePass();
+      prep.setPipeline(this.snowPrepPipeline);
+      prep.setBindGroup(0, this.snowPrepBindGroup);
+      prep.dispatchWorkgroups(Math.ceil(snowCount / WORKGROUP_SIZE));
+      prep.end();
+    }
     const canvasTex = this.ctx.getCurrentTexture();
     const pass = enc.beginRenderPass({
       colorAttachments: [
@@ -479,8 +508,7 @@ export class FishRenderer {
       pass.setVertexBuffer(0, this.meshes.full.vbo);
       pass.drawIndirect(this.drawArgs, 16);
     }
-    const snowCount = Math.round(SNOW.count * this.snowAmount);
-    if (this.layers.snow && snowCount > 0 && eye[1] < surfaceY) {
+    if (drawSnow) {
       pass.setPipeline(this.snowPipeline);
       pass.setBindGroup(0, this.snowBindGroup);
       pass.draw(6, snowCount);

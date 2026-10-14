@@ -6,6 +6,7 @@ import {
   DEFAULT_SNOW_AMOUNT,
   DEFAULT_VIGNETTE,
   DEFAULT_WAVES,
+  SNOW_AMOUNT_MAX,
   WAVE_SCALE_MAX,
 } from './config.js';
 
@@ -24,7 +25,7 @@ export const PRESET_KEYS = [
 export const PRESET_RANGES = {
   murkiness: [0, 4, 'water murkiness'],
   shafts: [0, 3, 'light shafts'],
-  snow: [0, 2, 'marine snow'],
+  snow: [0, SNOW_AMOUNT_MAX, 'marine snow'],
   vignette: [0, 1, 'vignette'],
   waveHeight: [0.1, 3, 'wave height'],
   waveScale: [0.4, WAVE_SCALE_MAX, 'wave scale (shorter →)'],

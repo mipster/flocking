@@ -5,6 +5,13 @@
 /** Spatial grid cell edge, in world units. Neighbor search scans cells within the species' radius. */
 export const CELL_SIZE = 8;
 
+/**
+ * Tank footprint the viewer allows (world units). The grid's prefix sum runs on one GPU thread over
+ * every cell, so its cost follows the footprint, not the fish count: at these maxima it is about
+ * 60k keys, which keeps that pass well under a millisecond.
+ */
+export const TANK_LIMITS = { min: 80, maxWidth: 400, maxDepth: 400 };
+
 /** Compute workgroup size; must match `@workgroup_size` in sim.wgsl. */
 export const WORKGROUP_SIZE = 64;
 
@@ -211,6 +218,11 @@ export const WAVE_SCALE_MAX = 1.5;
  * - brightness / beam: base brightness, and how much a focused beam adds
  */
 export const SNOW = {
+  color: [0.85, 0.92, 0.95],
+  opacity: 0.85,
+  swayRate: 0.17, // radians per second of the sideways wander (scaled per speck)
+  bobRate: 0.9, // radians per second of the wave bob
+  bobDepthFade: 0.05, // how quickly the bob dies away with depth, per world unit
   count: 24000,
   box: 170,
   size: 0.11,
@@ -222,6 +234,84 @@ export const SNOW = {
   beam: 1.2,
 };
 export const DEFAULT_SNOW_AMOUNT = 1;
+/** Largest value of the snow slider; the per-speck buffer is sized for it. */
+export const SNOW_AMOUNT_MAX = 2;
+
+/**
+ * Fish shading: light = ambient + hemisphere * (sky/ground blend by normal) + diffuse * lambert,
+ * then the paler belly is lifted. Colour variation per fish is tintBase + tintRange * random.
+ * tailStart/tailLength: where along the body (x, nose at +0.5) the tail wiggle begins to ramp in
+ * and how long that ramp is, so the head stays rigid.
+ */
+export const FISH_LOOK = {
+  ambient: 0.3,
+  hemisphere: 0.4,
+  diffuse: 0.55,
+  tintBase: 0.85,
+  tintRange: 0.3,
+  bellyLift: 1.25,
+  bellyFloor: 0.04,
+  bellyFade: 0.15,
+  tailStart: 0.1,
+  tailLength: 0.7,
+};
+
+/**
+ * Sand shading. The macro shape comes from floor.js; this is the surface detail on top:
+ * wind ripples (a ridge pattern perpendicular to `rippleDirection`, warped by value noise),
+ * three scales of grain, and how far away the fine detail fades out so it doesn't shimmer.
+ */
+export const SAND_LOOK = {
+  dark: [0.6, 0.5, 0.33],
+  light: [0.9, 0.82, 0.62],
+  ambient: 0.22,
+  diffuse: 0.9,
+  normalStep: 0.6, // world units between height samples used for the slope
+  detailNear: 80, // full detail closer than this ...
+  detailFar: 260, // ... none beyond this
+  rippleDirection: [0.9, 0.4],
+  rippleFrequency: 1.6,
+  rippleWarp: 6,
+  rippleWarpScale: 0.12,
+  rippleTilt: 0.14, // how much the ripples tilt the normal
+  rippleShade: 0.08, // how much they darken the troughs
+  grainScales: [0.8, 9, 40], // coarse patches, fine grain, per-cell speckle
+  grainShade: 0.28,
+};
+
+/**
+ * Open-water backdrop colour along a view ray (veil colour from WATER, then): brighter looking
+ * toward the surface, darker toward the floor; plus the sun seen through the water.
+ */
+export const BACKDROP = {
+  surfaceFrom: -0.05, // ray.y where the brightening starts ...
+  surfaceTo: 0.9, // ... and where it is complete
+  surfaceBoost: 1.6,
+  floorFrom: 0.05,
+  floorTo: -0.85,
+  floorDim: 0.65,
+  sunHalo: 0.35,
+  sunHaloPower: 6,
+  sunCore: 0.9,
+  sunCorePower: 80,
+  sunColor: [0.55, 0.85, 0.95],
+  sunRise: 0.3, // ray.y over which the sun glow fades in above the horizon
+};
+
+/** Sky seen through Snell's window and in reflections above the water. */
+export const SKY = {
+  horizon: [0.72, 0.82, 0.92],
+  zenith: [0.1, 0.32, 0.7],
+  zenithPower: 0.5,
+  sunDisc: 12,
+  sunDiscPower: 600,
+  sunHalo: 0.35,
+  sunHaloPower: 24,
+  sunColor: [1.0, 0.94, 0.8],
+};
+
+/** Reflectance of the water surface at normal incidence (Schlick's F0). */
+export const FRESNEL_F0 = 0.02;
 
 /**
  * Sun glint on fish scales: a tight specular flash from the flanks, scaled per species by its
@@ -235,12 +325,36 @@ export const DEFAULT_MURKINESS = 1;
 /** Sea floor mesh: covers `tiles` tank widths in each direction, one vertex every `spacing` units. */
 export const FLOOR_MESH = { tiles: 3, spacing: 3, maxCells: 500 };
 
+/**
+ * One WGSL `const` per field of a flat settings object: numbers become f32, 2-4 element arrays
+ * become vecNf, and names go from camelCase to PREFIX_SNAKE_CASE (`rippleTilt` -> SAND_RIPPLE_TILT).
+ */
+export function vecConsts(prefix, object) {
+  return Object.entries(object)
+    .map(([key, value]) => {
+      const name = `${prefix}_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`;
+      if (!Array.isArray(value)) return `const ${name} = ${value};`;
+      return `const ${name} = vec${value.length}f(${value.join(', ')});`;
+    })
+    .join('\n');
+}
+
 /** WGSL constants shared by the simulation and render shaders. */
 export function wgslHeader() {
   const table = waveTable();
   return `
 const WORKGROUP_SIZE = ${WORKGROUP_SIZE}u;
 const SPECIES_COUNT = ${SPECIES_COUNT}u;
+${vecConsts('FISH', FISH_LOOK)}
+${vecConsts('SAND', SAND_LOOK)}
+${vecConsts('BACKDROP', BACKDROP)}
+${vecConsts('SKY', SKY)}
+const FRESNEL_F0 = ${FRESNEL_F0};
+const SNOW_COLOR = vec3f(${SNOW.color.join(', ')});
+const SNOW_OPACITY = ${SNOW.opacity};
+const SNOW_SWAY_RATE = ${SNOW.swayRate};
+const SNOW_BOB_RATE = ${SNOW.bobRate};
+const SNOW_BOB_FADE = ${SNOW.bobDepthFade};
 const WATER_IOR = ${WATER_REFRACTIVE_INDEX};
 const SIMPLE_SPECIES = ${FISH_LOD.simpleSpecies}u;
 const FISH_RADIUS = ${FISH_BOUNDING_RADIUS};

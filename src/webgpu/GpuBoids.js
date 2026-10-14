@@ -35,6 +35,39 @@ const ENTRY_POINTS = [
   'steerGrid',
 ];
 
+// The shader module, bind group layout and pipelines depend only on the device, not on fish counts
+// or tank size, so they are built once per device and shared by every flock rebuild.
+const pipelineCache = new WeakMap();
+
+function simPipelines(device) {
+  let cached = pipelineCache.get(device);
+  if (cached) return cached;
+  const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + simWGSL });
+  module.getCompilationInfo().then((info) => {
+    for (const m of info.messages) console.warn(`WGSL ${m.type} ${m.lineNum}:${m.linePos} ${m.message}`);
+  });
+  const storage = { type: 'storage' };
+  const bgl = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+      ...[2, 3, 4, 5, 6, 7, 8, 9].map((binding) => ({
+        binding,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: storage,
+      })),
+    ],
+  });
+  const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
+  const pipes = {};
+  for (const entryPoint of ENTRY_POINTS) {
+    pipes[entryPoint] = device.createComputePipeline({ layout, compute: { module, entryPoint } });
+  }
+  cached = { bgl, pipes };
+  pipelineCache.set(device, cached);
+  return cached;
+}
+
 export class GpuBoids {
   // counts = [small, medium, large]; mode = 'grid' | 'brute'
   constructor(
@@ -84,27 +117,8 @@ export class GpuBoids {
 
     this.upload(counts);
 
-    const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + simWGSL });
-    module.getCompilationInfo().then((info) => {
-      for (const m of info.messages) console.warn(`WGSL ${m.type} ${m.lineNum}:${m.linePos} ${m.message}`);
-    });
-    const storage = { type: 'storage' };
-    const bgl = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        ...[2, 3, 4, 5, 6, 7, 8, 9].map((b) => ({
-          binding: b,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: storage,
-        })),
-      ],
-    });
-    const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
-    this.pipes = {};
-    for (const entryPoint of ENTRY_POINTS) {
-      this.pipes[entryPoint] = device.createComputePipeline({ layout, compute: { module, entryPoint } });
-    }
+    const { bgl, pipes } = simPipelines(device);
+    this.pipes = pipes;
     const b = (binding, buffer) => ({ binding, resource: { buffer } });
     this.bindGroup = device.createBindGroup({
       layout: bgl,
