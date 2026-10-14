@@ -30,5 +30,6 @@ export const SPECIES = [
   },
 ];
 
-export const DEFAULT_MIX = [0.8, 0.17, 0.03];
+// default absolute numbers of medium / large fish; the rest are small
+export const DEFAULT_COUNTS = { medium: 300, large: 8 };
 export const TANK_HALF = [60, 30, 40];

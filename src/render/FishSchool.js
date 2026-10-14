@@ -3,7 +3,7 @@ import vertexShader from './fish.vert.glsl?raw';
 import fragmentShader from './fish.frag.glsl?raw';
 
 // Low-poly fish, length 1 along local +x (head at +0.5), y up, z side. Flat shaded, ~70 tris.
-function buildFishGeometry() {
+export function buildFishGeometry() {
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const tris = [];
   const SEG = 6;

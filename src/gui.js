@@ -10,10 +10,18 @@ export function createGui(settings, species, actions) {
   g.add(settings, 'paused').name('pause');
   g.add(settings, 'showTank').name('show tank').onChange(actions.toggleTank);
   g.add(settings, 'fogDensity', 0, 0.03, 0.001).name('fog');
-  g.add(settings, 'mixSmall', 0, 1, 0.01).name('small share');
-  g.add(settings, 'mixMedium', 0, 1, 0.01).name('medium share');
+  g.add(settings, 'mediumCount', 0, 5000, 1).name('medium fish')
+    .onFinishChange(actions.rebuild);
+  g.add(settings, 'largeCount', 0, 500, 1).name('large fish')
+    .onFinishChange(actions.rebuild);
   g.add(actions, 'rebuild').name('reset');
+  // small fish are whatever remains: total - medium - large
 
+  addSpeciesFolders(gui, species);
+  return gui;
+}
+
+export function addSpeciesFolders(gui, species) {
   for (const s of species) {
     const f = gui.addFolder(s.name);
     f.addColor(s, 'color');
@@ -33,5 +41,4 @@ export function createGui(settings, species, actions) {
     f.add(s, 'wander', 0, 1, 0.01);
     f.close();
   }
-  return gui;
 }

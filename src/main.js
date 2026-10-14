@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { SPECIES, DEFAULT_MIX, TANK_HALF } from './species.js';
+import { SPECIES, DEFAULT_COUNTS, TANK_HALF } from './species.js';
 import { BoidSimulation } from './sim/BoidSimulation.js';
 import { FishSchool } from './render/FishSchool.js';
 import { createGui } from './gui.js';
@@ -34,8 +34,8 @@ const settings = {
   paused: false,
   showTank: true,
   fogDensity: 0.006,
-  mixSmall: DEFAULT_MIX[0],
-  mixMedium: DEFAULT_MIX[1],
+  mediumCount: DEFAULT_COUNTS.medium,
+  largeCount: DEFAULT_COUNTS.large,
 };
 
 let sim = null;
@@ -47,9 +47,10 @@ function rebuild() {
     school.dispose();
     sim.dispose();
   }
-  const small = settings.mixSmall;
-  const medium = Math.min(settings.mixMedium, 1 - small);
-  sim = new BoidSimulation(renderer, Number(settings.size), SPECIES, [small, medium]);
+  const total = Number(settings.size) ** 2;
+  const large = Math.min(settings.largeCount, total);
+  const medium = Math.min(settings.mediumCount, total - large);
+  sim = new BoidSimulation(renderer, Number(settings.size), SPECIES, [total - medium - large, medium, large]);
   school = new FishSchool(sim, SPECIES);
   scene.add(school.mesh);
 }

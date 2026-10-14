@@ -15,7 +15,7 @@ const SPECIES_UNIFORMS = {
 };
 
 export class BoidSimulation {
-  constructor(renderer, size, species, mix) {
+  constructor(renderer, size, species, counts) {
     this.size = size;
     this.count = size * size;
     this.species = species;
@@ -25,7 +25,7 @@ export class BoidSimulation {
 
     const posTex = this.gpu.createTexture();
     const velTex = this.gpu.createTexture();
-    this.fillInitial(posTex.image.data, velTex.image.data, mix);
+    this.fillInitial(posTex.image.data, velTex.image.data, counts);
 
     this.velVar = this.gpu.addVariable('textureVelocity', velocityShader, velTex);
     this.posVar = this.gpu.addVariable('texturePosition', positionShader, posTex);
@@ -45,11 +45,11 @@ export class BoidSimulation {
     this.syncUniforms();
   }
 
-  fillInitial(posData, velData, mix) {
-    const [pS, pM] = mix;
+  // counts = [small, medium, large]; positions are random so index order doesn't matter
+  fillInitial(posData, velData, counts) {
+    const [nS, nM] = counts;
     for (let i = 0; i < this.count; i++) {
-      const r = Math.random();
-      const sp = r < pS ? 0 : r < pS + pM ? 1 : 2;
+      const sp = i < nS ? 0 : i < nS + nM ? 1 : 2;
       const o = i * 4;
       posData[o] = (Math.random() * 2 - 1) * TANK_HALF[0] * 0.8;
       posData[o + 1] = (Math.random() * 2 - 1) * TANK_HALF[1] * 0.8;
