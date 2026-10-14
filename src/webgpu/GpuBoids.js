@@ -1,3 +1,4 @@
+import floorWGSL from './floor.wgsl?raw';
 import simWGSL from './sim.wgsl?raw';
 import { TANK_HALF as DEFAULT_HALF } from '../species.js';
 
@@ -50,7 +51,7 @@ export class GpuBoids {
 
     this.upload(counts);
 
-    const module = device.createShaderModule({ code: simWGSL });
+    const module = device.createShaderModule({ code: floorWGSL + simWGSL });
     module.getCompilationInfo().then((info) => {
       for (const m of info.messages) console.warn(`WGSL ${m.type} ${m.lineNum}:${m.linePos} ${m.message}`);
     });
@@ -86,7 +87,7 @@ export class GpuBoids {
       const sp = i < nS ? 0 : i < nS + nM ? 1 : 2;
       const o = i * 4;
       posData[o] = (Math.random() * 2 - 1) * this.half[0] * 0.8;
-      posData[o + 1] = (Math.random() * 2 - 1) * this.half[1] * 0.8;
+      posData[o + 1] = (Math.random() * 2 - 1) * this.half[1] * 0.7;
       posData[o + 2] = (Math.random() * 2 - 1) * this.half[2] * 0.8;
       posData[o + 3] = sp;
       const u = Math.random() * 2 - 1;

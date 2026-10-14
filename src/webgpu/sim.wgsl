@@ -112,7 +112,12 @@ fn integrate(i: u32, m: Me, a: Acc) {
   let inner = P.bounds.xyz - vec3f(margin);
   var over = (abs(m.pos) - inner) / margin;
   if (wrapOn()) { over.x = 0.0; over.z = 0.0; }
+  over.y = max(0.0, (m.pos.y - inner.y) / margin);   // top only; the bottom is the sea floor
   force -= sign(m.pos) * clamp(over, vec3f(0.0), vec3f(2.0)) * m.maxForce * 2.0;
+
+  // sea floor: push up as the fish gets within `margin` of the sand
+  let clearance = m.pos.y - floorY(m.pos.xz, P.bounds.xyz);
+  force.y += clamp((margin - clearance) / margin, 0.0, 2.0) * m.maxForce * 2.0;
 
   var v = m.vel + force * dt;
   var speed = length(v);
@@ -132,9 +137,11 @@ fn integrate(i: u32, m: Me, a: Acc) {
     if (abs(np.x) > h.x) { np.x = sign(np.x) * h.x; v.x = 0.0; }
     if (abs(np.z) > h.z) { np.z = sign(np.z) * h.z; v.z = 0.0; }
   }
-  // floor and surface are barriers in both modes
-  let yLim = h.y - 0.5;
-  if (abs(np.y) > yLim) { np.y = sign(np.y) * yLim; v.y = 0.0; }
+  // sea floor and surface are barriers in both modes
+  let yMin = floorY(np.xz, h) + 0.6;
+  let yMax = h.y - 0.5;
+  if (np.y < yMin) { np.y = yMin; v.y = max(v.y, 0.0); }
+  if (np.y > yMax) { np.y = yMax; v.y = min(v.y, 0.0); }
 
   vel[i] = vec4f(v, phase);
   pos[i] = vec4f(np, f32(m.sp));

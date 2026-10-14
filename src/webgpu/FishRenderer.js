@@ -1,3 +1,4 @@
+import floorWGSL from './floor.wgsl?raw';
 import renderWGSL from './render.wgsl?raw';
 import { buildFishVertices } from './fishGeometry.js';
 
@@ -63,10 +64,10 @@ export class FishRenderer {
     this.vbo = device.createBuffer({ size: verts.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.vbo, 0, verts);
 
-    this.ubo = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.ubo = device.createBuffer({ size: 128, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.spBuf = device.createBuffer({ size: 6 * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
-    const module = device.createShaderModule({ code: renderWGSL });
+    const module = device.createShaderModule({ code: floorWGSL + renderWGSL });
     module.getCompilationInfo().then((info) => {
       for (const m of info.messages) console.warn(`WGSL ${m.type} ${m.lineNum}:${m.linePos} ${m.message}`);
     });
@@ -86,6 +87,19 @@ export class FishRenderer {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
       multisample: { count: SAMPLES },
+    });
+
+    this.floorPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsFloor' },
+      fragment: { module, entryPoint: 'fsFloor', targets: [{ format: this.format }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
+      multisample: { count: SAMPLES },
+    });
+    this.floorBindGroup = device.createBindGroup({
+      layout: this.floorPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
     });
 
     this.size = [0, 0];
@@ -133,13 +147,21 @@ export class FishRenderer {
     const aspect = this.size[0] / this.size[1];
     const cp = Math.cos(this.pitch);
     const eye = [Math.sin(this.yaw) * cp * this.dist, Math.sin(this.pitch) * this.dist, Math.cos(this.yaw) * cp * this.dist];
-    const vp = mul(perspective(55 * Math.PI / 180, aspect, 0.5, 600), lookAt(eye, [0, 0, 0], [0, 1, 0]));
+    const vp = mul(perspective(55 * Math.PI / 180, aspect, 1, 3000), lookAt(eye, [0, 0, 0], [0, 1, 0]));
     const light = [0.3, 1.0, 0.4];
     const ll = Math.hypot(...light);
-    const u = new Float32Array(24);
+    // the floor mesh covers 3x3 tank widths so wrapped fish always have sand beneath them
+    const half = boids.half;
+    const spanX = half[0] * 6;
+    const spanZ = half[2] * 6;
+    const cols = Math.min(500, Math.ceil(spanX / 3));
+    const rows = Math.min(500, Math.ceil(spanZ / 3));
+    const u = new Float32Array(32);
     u.set(vp, 0);
     u.set([light[0] / ll, light[1] / ll, light[2] / ll, 0], 16);
     u.set([...this.fogColor, this.fogDensity], 20);
+    u.set([half[0], half[1], half[2], 0], 24);
+    u.set([cols, rows, spanX, spanZ], 28);
     device.queue.writeBuffer(this.ubo, 0, u);
 
     const enc = device.createCommandEncoder();
@@ -154,6 +176,9 @@ export class FishRenderer {
         view: this.depthTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard',
       },
     });
+    pass.setPipeline(this.floorPipeline);
+    pass.setBindGroup(0, this.floorBindGroup);
+    pass.draw(cols * rows * 6);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
     pass.setVertexBuffer(0, this.vbo);
