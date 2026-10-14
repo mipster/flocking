@@ -57,6 +57,7 @@ Three species, each with its own speed, force limit and flocking weights:
 - **Boundaries**: the floor, surface, near and far walls are hard barriers. The left and right edges either wrap around (same direction and velocity, neighbors found across the seam) or are soft walls.
 - The fish vertex shader builds an orientation basis from the velocity and bends the tail with the swim phase.
 - **Water**: Beer-Lambert absorption per colour channel (red goes first) dims sunlight with depth and tints distant objects, with veiling light filling in, plus a gradient backdrop with a sun glow. The **water murkiness** slider scales it.
+- **Surface**: Gerstner waves, drawn translucent. From above you see through it with a Fresnel sky and sun reflection; from below you see the sky through Snell's window, and a mirror of the water beyond the critical angle. **camera looks at height** tilts the view up at it.
 
 ## Project layout
 

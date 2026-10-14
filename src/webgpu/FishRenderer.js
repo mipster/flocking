@@ -1,6 +1,6 @@
 import renderWGSL from './render.wgsl?raw';
 import { buildFishVertices } from './fishGeometry.js';
-import { floorWGSL } from './floor.js';
+import { FLOOR, floorWGSL } from './floor.js';
 import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './layout.js';
 import {
   CAMERA,
@@ -9,6 +9,7 @@ import {
   LIGHT_DIRECTION,
   SPECIES_COUNT,
   WATER,
+  WAVE_AMPLITUDE_TOTAL,
   wgslHeader,
 } from './config.js';
 
@@ -75,6 +76,7 @@ export class FishRenderer {
     this.yaw = 0;
     this.pitch = CAMERA.startPitch;
     this.dist = CAMERA.startDistance;
+    this.targetY = 0; // height the camera orbits and looks at; the viewer sets it every frame
 
     this.ctx = canvas.getContext('webgpu');
     this.format = navigator.gpu.getPreferredCanvasFormat();
@@ -144,6 +146,28 @@ export class FishRenderer {
       entries: [{ binding: 0, resource: { buffer: this.ubo } }],
     });
 
+    // translucent water surface, drawn last; premultiplied alpha so it can fade out at its edge
+    const premultiplied = {
+      color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+    };
+    this.surfacePipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsSurface' },
+      fragment: {
+        module,
+        entryPoint: 'fsSurface',
+        targets: [{ format: this.format, blend: premultiplied }],
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
+      multisample: { count: SAMPLES },
+    });
+    this.surfaceBindGroup = device.createBindGroup({
+      layout: this.surfacePipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
+    });
+
     this.floorBindGroup = device.createBindGroup({
       layout: this.floorPipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: this.ubo } }],
@@ -198,23 +222,25 @@ export class FishRenderer {
 
     const aspect = this.size[0] / this.size[1];
     const cp = Math.cos(this.pitch);
+    // keep the camera above the highest dune so it never ends up under the sand
+    const half = boids.half;
+    const lowestEyeY = -half[1] + FLOOR.lift + FLOOR.amplitudes.reduce((a, b) => a + b, 0) + 1;
     const eye = [
       Math.sin(this.yaw) * cp * this.dist,
-      Math.sin(this.pitch) * this.dist,
+      Math.max(this.targetY + Math.sin(this.pitch) * this.dist, lowestEyeY),
       Math.cos(this.yaw) * cp * this.dist,
     ];
     const proj = perspective((CAMERA.fovDegrees * Math.PI) / 180, aspect, CAMERA.near, CAMERA.far);
 
     // the floor mesh covers several tank widths so wrapped fish always have sand beneath them
     const { tiles, spacing, maxCells } = FLOOR_MESH;
-    const half = boids.half;
     const spanX = half[0] * 2 * tiles;
     const spanZ = half[2] * 2 * tiles;
     const cols = Math.min(maxCells, Math.ceil(spanX / spacing));
     const rows = Math.min(maxCells, Math.ceil(spanZ / spacing));
 
     // view basis comes straight from the view matrix rows (camera looks down -z)
-    const view = lookAt(eye, [0, 0, 0], [0, 1, 0]);
+    const view = lookAt(eye, [0, this.targetY, 0], [0, 1, 0]);
     const tanHalfY = 1 / proj[5];
 
     device.queue.writeBuffer(
@@ -225,6 +251,8 @@ export class FishRenderer {
         light: LIGHT_DIRECTION,
         absorption: WATER.absorption.map((a) => a * this.murkiness),
         half,
+        surfaceY: half[1] + WAVE_AMPLITUDE_TOTAL,
+        time: performance.now() / 1000,
         floorGrid: [cols, rows, spanX, spanZ],
         camera: {
           right: [view[0], view[4], view[8]],
@@ -265,6 +293,9 @@ export class FishRenderer {
     pass.setBindGroup(0, this.bindGroup);
     pass.setVertexBuffer(0, this.vbo);
     pass.draw(this.vertexCount, boids.count);
+    pass.setPipeline(this.surfacePipeline);
+    pass.setBindGroup(0, this.surfaceBindGroup);
+    pass.draw(cols * rows * 6);
     pass.end();
     device.queue.submit([enc.finish()]);
   }

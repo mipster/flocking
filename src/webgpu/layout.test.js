@@ -100,6 +100,8 @@ describe('packRenderUniforms', () => {
     light: [0, 3, 4],
     absorption: [0.01, 0.002, 0.001],
     half: [120, 30, 80],
+    surfaceY: 31.8,
+    time: 7.5,
     floorGrid: [240, 160, 720, 480],
     camera: {
       right: [1, 0, 0],
@@ -126,7 +128,7 @@ describe('packRenderUniforms', () => {
       expect.closeTo(0.001, 6),
       0,
     ]);
-    expect(Array.from(out.slice(24, 27))).toEqual([120, 30, 80]);
+    expect(Array.from(out.slice(24, 28))).toEqual([120, 30, 80, expect.closeTo(31.8, 4)]);
     expect(Array.from(out.slice(28, 32))).toEqual([240, 160, 720, 480]);
   });
 
@@ -134,6 +136,6 @@ describe('packRenderUniforms', () => {
     expect(Array.from(out.slice(32, 36))).toEqual([1, 0, 0, expect.closeTo(0.8, 6)]);
     expect(Array.from(out.slice(36, 40))).toEqual([0, 1, 0, expect.closeTo(0.5, 6)]);
     expect(Array.from(out.slice(40, 44))).toEqual([0, 0, -1, 0]);
-    expect(Array.from(out.slice(44, 48))).toEqual([5, 42, 9, 0]);
+    expect(Array.from(out.slice(44, 48))).toEqual([5, 42, 9, 7.5]);
   });
 });

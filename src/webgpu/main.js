@@ -3,7 +3,7 @@ import { SPECIES, DEFAULT_COUNTS, TANK_HALF } from '../species.js';
 import { addSpeciesFolders } from '../gui.js';
 import { getDevice, GpuBoids } from './GpuBoids.js';
 import { FishRenderer } from './FishRenderer.js';
-import { CAMERA, DEFAULT_MURKINESS, DEFAULT_STEERING_SMOOTHING } from './config.js';
+import { CAMERA, DEFAULT_LOOK_HEIGHT, DEFAULT_MURKINESS, DEFAULT_STEERING_SMOOTHING } from './config.js';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
@@ -21,6 +21,7 @@ const settings = {
   tankWidth: 240,
   tankDepth: 160,
   murkiness: DEFAULT_MURKINESS,
+  lookHeight: DEFAULT_LOOK_HEIGHT,
   smoothing: DEFAULT_STEERING_SMOOTHING,
   mediumCount: DEFAULT_COUNTS.medium,
   largeCount: DEFAULT_COUNTS.large,
@@ -36,6 +37,7 @@ async function main() {
 
   const renderer = new FishRenderer(device, canvas, SPECIES);
   let boids = null;
+  if (DEBUG) window.__renderer = renderer; // console inspection: camera yaw/pitch/dist
 
   function rebuild() {
     boids?.destroy();
@@ -90,6 +92,7 @@ async function main() {
   g.add(settings, 'speed', 0, 3, 0.05).name('speed ×');
   g.add(settings, 'paused').name('pause');
   g.add(settings, 'murkiness', 0, 4, 0.05).name('water murkiness');
+  g.add(settings, 'lookHeight', -30, 40, 1).name('camera looks at height');
   g.add(settings, 'mediumCount', 0, 20000, 1).name('medium fish').onFinishChange(rebuild);
   g.add(settings, 'largeCount', 0, 2000, 1).name('large fish').onFinishChange(rebuild);
   g.add({ reset: rebuild }, 'reset');
@@ -143,6 +146,7 @@ async function main() {
     const dpr = Math.min(window.devicePixelRatio, 2);
     renderer.resize(Math.floor(window.innerWidth * dpr), Math.floor(window.innerHeight * dpr));
     renderer.murkiness = settings.murkiness;
+    renderer.targetY = settings.lookHeight;
     if (!settings.paused) boids.step(dt * settings.speed);
     renderer.render(boids);
 

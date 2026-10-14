@@ -26,12 +26,15 @@ export const SPECIES_COUNT = 3;
 /** Fish tail motion (fraction of body length; radians per body length). */
 export const TAIL = { amplitude: 0.14, wavenumber: 7.0 };
 
+/** Height of the point the camera looks at by default, a little under the tank top. */
+export const DEFAULT_LOOK_HEIGHT = 25;
+
 export const CAMERA = {
   fovDegrees: 55,
   near: 1,
   far: 3000,
   startDistance: 260,
-  startPitch: 0.2,
+  startPitch: -0.1, // camera starts below the surface, looking up through the flock at it
   minDistance: 20,
   maxDistance: 700,
 };
@@ -50,6 +53,33 @@ export const WATER = {
   deepFade: 0.6,
 };
 
+/**
+ * Surface waves (Gerstner). Directions are in the x/z plane; wavelength and amplitude in world
+ * units. The mean water level sits above the tank top by the summed amplitude, so troughs never
+ * dip below the height fish are allowed to reach.
+ */
+export const WAVES = [
+  { direction: [1.0, 0.25], amplitude: 0.8, wavelength: 90 },
+  { direction: [0.6, 0.8], amplitude: 0.5, wavelength: 55 },
+  { direction: [-0.3, 1.0], amplitude: 0.3, wavelength: 31 },
+  { direction: [-0.9, -0.4], amplitude: 0.2, wavelength: 19 },
+];
+export const WAVE_STEEPNESS = 0.6; // 0 = sine waves, 1 = pointed crests that just stop looping
+export const WAVE_AMPLITUDE_TOTAL = WAVES.reduce((sum, w) => sum + w.amplitude, 0);
+const GRAVITY = 9.81;
+
+/** Per-wave shader constants: [dirX, dirZ, amplitude, k] and [angular speed, horizontal steepness]. */
+export function waveTable() {
+  return WAVES.map((w) => {
+    const len = Math.hypot(...w.direction);
+    const k = (2 * Math.PI) / w.wavelength;
+    return {
+      shape: [w.direction[0] / len, w.direction[1] / len, w.amplitude, k],
+      dynamics: [Math.sqrt(GRAVITY * k), WAVE_STEEPNESS / (k * w.amplitude * WAVES.length)],
+    };
+  });
+}
+
 /** Multiplier on the absorption coefficients; the viewer exposes it as a slider. */
 export const DEFAULT_MURKINESS = 1;
 
@@ -58,6 +88,7 @@ export const FLOOR_MESH = { tiles: 3, spacing: 3, maxCells: 500 };
 
 /** WGSL constants shared by the simulation and render shaders. */
 export function wgslHeader() {
+  const table = waveTable();
   return `
 const TAIL_AMP = ${TAIL.amplitude};
 const TAIL_K = ${TAIL.wavenumber};
@@ -66,5 +97,8 @@ const WATER_SCATTER = vec3f(${WATER.scatter.join(', ')});
 const CLEARANCE_BASE = ${CLEARANCE.base};
 const CLEARANCE_BELLY = ${CLEARANCE.belly};
 const CLEARANCE_FIN = ${CLEARANCE.fin};
+const WAVE_COUNT = ${WAVES.length}u;
+const WAVES = array<vec4f, ${WAVES.length}>(${table.map((w) => `vec4f(${w.shape.join(', ')})`).join(', ')});
+const WAVE_DYNAMICS = array<vec2f, ${WAVES.length}>(${table.map((w) => `vec2f(${w.dynamics.join(', ')})`).join(', ')});
 `;
 }

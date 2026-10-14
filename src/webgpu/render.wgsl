@@ -2,12 +2,12 @@ struct RU {
   viewProj: mat4x4f,
   light: vec4f,     // xyz = direction toward the sun
   absorb: vec4f,    // rgb = extinction per unit (already scaled by murkiness)
-  tank: vec4f,      // half extents xyz; y is also the water surface height
+  tank: vec4f,      // half extents xyz, a = mean water surface height
   floorGrid: vec4f, // cols, rows, world span x, world span z
   camRight: vec4f,  // xyz, a = tan(fov/2) * aspect
   camUp: vec4f,     // xyz, a = tan(fov/2)
   camFwd: vec4f,    // xyz
-  camPos: vec4f,    // xyz = camera world position
+  camPos: vec4f,    // xyz = camera world position, a = time in seconds
 };
 
 @group(0) @binding(0) var<uniform> R: RU;
@@ -34,7 +34,7 @@ struct DepthLight {
 };
 
 fn depthLight(worldY: f32) -> DepthLight {
-  let depth = max(R.tank.y - worldY, 0.0);
+  let depth = max(R.tank.w - worldY, 0.0);
   var l: DepthLight;
   l.sun = exp(-R.absorb.xyz * depth);
   l.veil = WATER_SCATTER * exp(-R.absorb.xyz * depth * DEEP_FADE);
@@ -101,8 +101,9 @@ struct FloorOut {
   @location(3) veil: vec3f,
 };
 
-@vertex
-fn vsFloor(@builtin(vertex_index) vi: u32) -> FloorOut {
+// World x/z of vertex `vi` of the big horizontal grid (two triangles per cell) that the floor and
+// the water surface are both drawn on.
+fn gridVertex(vi: u32) -> vec2f {
   let cols = u32(R.floorGrid.x);
   let quad = vi / 6u;
   let corner = vi % 6u;
@@ -114,7 +115,12 @@ fn vsFloor(@builtin(vertex_index) vi: u32) -> FloorOut {
   let c = offs[corner];
   let gx = f32(qx + c.x) / R.floorGrid.x - 0.5;
   let gz = f32(qz + c.y) / R.floorGrid.y - 0.5;
-  let xz = vec2f(gx * R.floorGrid.z, gz * R.floorGrid.w);
+  return vec2f(gx * R.floorGrid.z, gz * R.floorGrid.w);
+}
+
+@vertex
+fn vsFloor(@builtin(vertex_index) vi: u32) -> FloorOut {
+  let xz = gridVertex(vi);
   let y = floorY(xz, R.tank.xyz);
   var o: FloorOut;
   o.wp = vec3f(xz.x, y, xz.y);
@@ -189,22 +195,135 @@ fn vsBg(@builtin(vertex_index) vi: u32) -> BgOut {
   return o;
 }
 
+// Open-water colour seen along `ray` from the camera: brighter looking toward the surface,
+// darker toward the floor. Also stands in for the mirror-like underside of the surface.
+fn waterColor(ray: vec3f) -> vec3f {
+  let veil = depthLight(R.camPos.y).veil;
+  let toSurface = smoothstep(-0.05, 0.9, ray.y);
+  let toFloor = smoothstep(0.05, -0.85, ray.y);
+  return veil * (1.0 + 1.6 * toSurface) * (1.0 - 0.65 * toFloor);
+}
+
 @fragment
 fn fsBg(in: BgOut) -> @location(0) vec4f {
   let ray = normalize(
     R.camFwd.xyz + in.ndc.x * R.camRight.xyz * R.camRight.w + in.ndc.y * R.camUp.xyz * R.camUp.w);
   let sigma = R.absorb.xyz;
-  let camDepth = max(R.tank.y - R.camPos.y, 0.0);
-
-  // water colour at the camera: brighter looking toward the surface, darker toward the floor
-  let veil = WATER_SCATTER * exp(-sigma * camDepth * DEEP_FADE);
-  let toSurface = smoothstep(-0.05, 0.9, ray.y);
-  let toFloor = smoothstep(0.05, -0.85, ray.y);
-  var col = veil * (1.0 + 1.6 * toSurface) * (1.0 - 0.65 * toFloor);
+  let camDepth = max(R.tank.w - R.camPos.y, 0.0);
+  // above the water, rays that point up see the sky, not the underwater gradient
+  if (R.camPos.y >= R.tank.w && ray.y > 0.0) {
+    return vec4f(skyColor(ray), 1.0);
+  }
+  var col = waterColor(ray);
 
   // the sun seen through the water: a soft halo plus a tight core, tinted blue-green
   let s = max(dot(ray, R.light.xyz), 0.0);
   let glow = 0.35 * pow(s, 6.0) + 0.9 * pow(s, 80.0);
   col += vec3f(0.55, 0.85, 0.95) * glow * exp(-sigma * camDepth) * smoothstep(0.0, 0.3, ray.y);
   return vec4f(col, 1.0);
+}
+
+// ---- water surface -----------------------------------------------------------
+
+// Phase of wave `i` at rest position `xz`; shared by the displacement and the normal.
+fn wavePhase(i: u32, xz: vec2f, t: f32) -> f32 {
+  let w = WAVES[i];
+  return w.w * dot(w.xy, xz) - WAVE_DYNAMICS[i].x * t;
+}
+
+// Gerstner waves: each crest moves points horizontally as well as vertically, which sharpens
+// crests and flattens troughs. Returns the (dx, dy, dz) displacement of rest position `xz`.
+fn waveDisplace(xz: vec2f, t: f32) -> vec3f {
+  var d = vec3f(0.0);
+  for (var i = 0u; i < WAVE_COUNT; i++) {
+    let w = WAVES[i];
+    let phase = wavePhase(i, xz, t);
+    let c = cos(phase);
+    let q = WAVE_DYNAMICS[i].y;
+    d.x += q * w.z * w.x * c;
+    d.z += q * w.z * w.y * c;
+    d.y += w.z * sin(phase);
+  }
+  return d;
+}
+
+// upward-facing surface normal at rest position `xz`
+fn waveNormal(xz: vec2f, t: f32) -> vec3f {
+  var n = vec3f(0.0, 1.0, 0.0);
+  for (var i = 0u; i < WAVE_COUNT; i++) {
+    let w = WAVES[i];
+    let phase = wavePhase(i, xz, t);
+    let c = cos(phase);
+    n.x -= w.x * w.w * w.z * c;
+    n.z -= w.y * w.w * w.z * c;
+    n.y -= WAVE_DYNAMICS[i].y * w.w * w.z * sin(phase);
+  }
+  return normalize(n);
+}
+
+// the sky as seen from underneath or reflected: pale at the horizon, deeper blue overhead, sun disc
+fn skyColor(dir: vec3f) -> vec3f {
+  let up = clamp(dir.y, 0.0, 1.0);
+  let base = mix(vec3f(0.72, 0.82, 0.92), vec3f(0.10, 0.32, 0.70), pow(up, 0.5));
+  let s = max(dot(dir, R.light.xyz), 0.0);
+  let sun = pow(s, 600.0) * 12.0 + pow(s, 24.0) * 0.35;
+  return base + vec3f(1.0, 0.94, 0.8) * sun;
+}
+
+struct SurfaceOut {
+  @builtin(position) clip: vec4f,
+  @location(0) rest: vec2f,
+  @location(1) wp: vec3f,
+  @location(2) edge: f32,
+};
+
+@vertex
+fn vsSurface(@builtin(vertex_index) vi: u32) -> SurfaceOut {
+  let xz = gridVertex(vi);
+  let d = waveDisplace(xz, R.camPos.w);
+  var o: SurfaceOut;
+  o.rest = xz;
+  o.wp = vec3f(xz.x + d.x, R.tank.w + d.y, xz.y + d.z);
+  o.clip = R.viewProj * vec4f(o.wp, 1.0);
+  // fade the surface out toward the edge of the mesh so it melts into the open water beyond
+  let r = max(abs(xz.x) / (R.floorGrid.z * 0.5), abs(xz.y) / (R.floorGrid.w * 0.5));
+  o.edge = 1.0 - smoothstep(0.7, 1.0, r);
+  return o;
+}
+
+fn fresnel(cosTheta: f32) -> f32 {
+  return 0.02 + 0.98 * pow(1.0 - clamp(cosTheta, 0.0, 1.0), 5.0);
+}
+
+@fragment
+fn fsSurface(in: SurfaceOut) -> @location(0) vec4f {
+  let n = waveNormal(in.rest, R.camPos.w);
+  let toCam = R.camPos.xyz - in.wp;
+  let dist = length(toCam);
+  let v = toCam / dist;
+
+  var color: vec3f;
+  var alpha: f32;
+  if (R.camPos.y >= R.tank.w) {
+    // from above: mostly see through the water, plus a Fresnel reflection of the sky
+    let f = fresnel(dot(n, v));
+    color = skyColor(reflect(-v, n)) * f;
+    alpha = f;
+  } else {
+    // from below: the sky is seen through Snell's window, mirrored water elsewhere
+    let nd = -n;
+    let refracted = refract(-v, nd, 1.33);
+    // past the critical angle (refracted == 0) the surface mirrors the water below it; that colour
+    // is already hazed, so only the sky seen through the window is attenuated along the way
+    let mirror = waterColor(reflect(-v, nd));
+    color = mirror;
+    if (dot(refracted, refracted) > 1e-4) {
+      let sky = underwater(skyColor(refracted), vec3f(1.0), WATER_SCATTER, dist);
+      // Schlick evaluated at the angle of the transmitted ray: on the dense side of the interface
+      // reflectance climbs smoothly to 1 at the critical angle instead of jumping there
+      color = mix(sky, mirror, fresnel(dot(refracted, n)));
+    }
+    alpha = 1.0;
+  }
+  return vec4f(color * in.edge, alpha * in.edge);
 }

@@ -112,24 +112,24 @@ export const RENDER_UNIFORM_FLOATS = 48;
  *   viewProj  : mat4x4f (column-major)
  *   light     = (direction toward the sun xyz, 0)
  *   absorb    = (extinction rgb per unit, 0)
- *   tank      = (half.x, half.y, half.z, 0); half.y doubles as the water surface height
+ *   tank      = (half.x, half.y, half.z, mean water surface height)
  *   floorGrid = (cols, rows, world span x, world span z)
  *   camRight  = (right xyz, tan(fov/2) * aspect)
  *   camUp     = (up xyz, tan(fov/2))
  *   camFwd    = (forward xyz, 0)
- *   camPos    = (camera world position xyz, 0)
+ *   camPos    = (camera world position xyz, time in seconds)
  */
-export function packRenderUniforms({ viewProj, light, absorption, half, floorGrid, camera }) {
+export function packRenderUniforms({ viewProj, light, absorption, half, surfaceY, floorGrid, time, camera }) {
   const out = new Float32Array(RENDER_UNIFORM_FLOATS);
   const l = Math.hypot(...light);
   out.set(viewProj, 0);
   out.set([light[0] / l, light[1] / l, light[2] / l, 0], 16);
   out.set([...absorption, 0], 20);
-  out.set([half[0], half[1], half[2], 0], 24);
+  out.set([half[0], half[1], half[2], surfaceY], 24);
   out.set(floorGrid, 28);
   out.set([...camera.right, camera.tanHalfX], 32);
   out.set([...camera.up, camera.tanHalfY], 36);
   out.set([...camera.forward, 0], 40);
-  out.set([...camera.position, 0], 44);
+  out.set([...camera.position, time], 44);
   return out;
 }
