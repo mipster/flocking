@@ -65,9 +65,9 @@ Three species, each with its own speed, force limit and flocking weights:
 
 - **Mouse**: drag to orbit, wheel to zoom.
 - **Global panel (top right)**: fish count (16k to 2M), neighbor mode, samples per cell, left/right edges, tank width and depth, steering smoothing, speed, pause, camera look height, and exact medium and large fish counts. Each species folder exposes every steering parameter and applies it live.
-- **Water look**: a **preset** dropdown (Reef, Clear shallows, Deep blue, Murky bay, Stormy) sets water murkiness, light shafts, marine snow, vignette and the three wave sliders (**wave height**, **wave scale**, **wave speed**) together. Moving any of those sliders by hand switches the dropdown to "custom". Presets live in `src/webgpu/presets.js`.
+- **Water look**: a **preset** dropdown (Reef, Clear shallows, Deep blue, Murky bay, Stormy) sets water murkiness, light shafts, marine snow, bubbles, vignette and the three wave sliders (**wave height**, **wave scale**, **wave speed**) together. Moving any of those sliders by hand switches the dropdown to "custom". Presets live in `src/webgpu/presets.js`.
 - **Bottom left**: FPS, GPU time per frame, frame time and fish count.
-- **`?debug`**: adds profiling switches (simulate, draw fish, surface, sea floor, marine snow, frustum culling, sand caustics, pixel ratio) and exposes `window.__boids` and `window.__renderer`.
+- **`?debug`**: adds profiling switches (simulate, draw fish, surface, sea floor, marine snow, bubbles, frustum culling, sand caustics, pixel ratio) and exposes `window.__boids` and `window.__renderer`.
 - **`?msaa=1`**: turns multisampling off, which is much cheaper with very many fish (works with or without `?debug`).
 
 ## How it works
@@ -83,6 +83,7 @@ Three species, each with its own speed, force limit and flocking weights:
 - **Caustics**: sunlight focused by the waves (the mesh waves plus fine ripples too short to mesh) is analytic per pixel: the surface acts as a lens, and light at a point is `1 / |det(I + bend * depth * Hessian(height))|`. It dapples the sand and, evaluated once per fish in a small compute pass before drawing, the fish; it washes out with depth.
 - **Light shafts**: each view ray is marched at half resolution until it reaches the range limit, the surface or the sea floor, accumulating sunlight scattered toward the eye. The sunlight at each sample is modulated by the same wave focusing as the caustics, so the beams sway with the waves, and the haze is brighter looking toward the sun. It is added on top of the finished frame; the **light shafts** slider scales it (0 skips the passes).
 - **Marine snow**: ~24k drifting specks, placed analytically by a small compute pass each frame (a function of index and time, so no simulation state) inside a box that follows the camera. They sink, wander and bob under the waves, are lit and hazed like everything else, and brighten in beams. The **marine snow** slider scales the count.
+- **Bubbles**: ~2.4k bubbles (up to 4.8k) rising from 32 fixed vents on the sea floor, also analytic (position is a pure function of bubble index and time, so no state). Each one swells as it rises, wobbles sideways, pops near the surface, then waits a random gap before restarting. Fish swim through them (they do not react yet). The **bubbles** slider scales the count.
 - **Patchy haze**: the density the shafts scatter varies slowly in 3D noise and drifts, so beams look uneven (`HAZE` in `config.js`).
 - **Vignette**: a final full-screen pass multiplies the frame by a factor that falls toward the corners (`VIGNETTE` in `config.js`); the **vignette** slider scales it, and 0 skips the pass.
 - **Glint**: small fish flash a tight sun specular off their flanks as they cross the light (per-species **glint** slider; it rides on the caustic-lit sunlight, so it pulses with the caustics).
@@ -101,8 +102,8 @@ src/webgpu/caustics.js       wave-focusing WGSL shared by sand, fish and shafts
 src/webgpu/main.js           viewer: device, GUI, camera, frame loop
 src/webgpu/GpuBoids.js       buffers, pipelines, per-frame compute passes
 src/webgpu/sim.wgsl          steering, spatial grid, boundaries
-src/webgpu/FishRenderer.js   passes: backdrop, floor, culled fish, snow, surface, shafts, vignette
-src/webgpu/render.wgsl       all render shaders (water, fish, floor, surface, shafts, snow)
+src/webgpu/FishRenderer.js   passes: backdrop, floor, culled fish, snow, bubbles, surface, shafts, vignette
+src/webgpu/render.wgsl       all render shaders (water, fish, floor, surface, shafts, snow, bubbles)
 src/webgpu/fishGeometry.js   low-poly fish meshes (full and simple)
 src/bench.js                 benchmark runner
 ```
@@ -110,4 +111,4 @@ src/bench.js                 benchmark runner
 ## Roadmap
 
 - Mouse-controlled predator or food source.
-- Optional: baked caustic texture, bubbles, seaweed and rocks on the floor.
+- Optional: baked caustic texture, bubbles that react to fish, seaweed and rocks on the floor.

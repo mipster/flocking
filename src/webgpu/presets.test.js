@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_MURKINESS,
   DEFAULT_SHAFT_STRENGTH,
+  DEFAULT_BUBBLE_AMOUNT,
   DEFAULT_SNOW_AMOUNT,
   DEFAULT_VIGNETTE,
   DEFAULT_WAVES,
@@ -25,6 +26,7 @@ describe('presets', () => {
       murkiness: DEFAULT_MURKINESS,
       shafts: DEFAULT_SHAFT_STRENGTH,
       snow: DEFAULT_SNOW_AMOUNT,
+      bubbles: DEFAULT_BUBBLE_AMOUNT,
       vignette: DEFAULT_VIGNETTE,
       waveHeight: DEFAULT_WAVES.height,
       waveScale: DEFAULT_WAVES.scale,

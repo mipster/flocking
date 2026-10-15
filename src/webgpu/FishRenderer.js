@@ -4,9 +4,12 @@ import { causticsWGSL } from './caustics.js';
 import { FLOOR, floorMeshGrid, floorWGSL } from './floor.js';
 import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './layout.js';
 import {
+  BUBBLE_AMOUNT_MAX,
+  BUBBLES,
   CAMERA,
   DEFAULT_MURKINESS,
   DEFAULT_SHAFT_STRENGTH,
+  DEFAULT_BUBBLE_AMOUNT,
   DEFAULT_SNOW_AMOUNT,
   DEFAULT_VIGNETTE,
   DEFAULT_WAVES,
@@ -86,6 +89,7 @@ export class FishRenderer {
     this.murkiness = DEFAULT_MURKINESS;
     this.shaftStrength = DEFAULT_SHAFT_STRENGTH;
     this.snowAmount = DEFAULT_SNOW_AMOUNT;
+    this.bubbleAmount = DEFAULT_BUBBLE_AMOUNT;
     this.vignette = DEFAULT_VIGNETTE;
     // wave sliders; the clock is advanced here so changing the speed never makes waves jump
     this.waveHeight = DEFAULT_WAVES.height;
@@ -187,41 +191,62 @@ export class FishRenderer {
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
       multisample: { count: this.samples },
     });
-    // marine snow: tiny soft quads, premultiplied alpha, depth-tested but not written
-    this.snowPipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module, entryPoint: 'vsSnow' },
-      fragment: {
-        module,
-        entryPoint: 'fsSnow',
-        targets: [{ format: this.format, blend: premultiplied }],
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
-      multisample: { count: this.samples },
+    // particle layers: a compute pass places and lights each particle once per frame, then tiny
+    // camera-facing quads are drawn (premultiplied alpha, depth-tested but not written)
+    const layer = (def) => {
+      const pipeline = device.createRenderPipeline({
+        layout: 'auto',
+        vertex: { module, entryPoint: def.vertex },
+        fragment: {
+          module,
+          entryPoint: def.fragment,
+          targets: [{ format: this.format, blend: premultiplied }],
+        },
+        primitive: { topology: 'triangle-list', cullMode: 'none' },
+        depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
+        multisample: { count: this.samples },
+      });
+      // two vec4s per particle, sized for the largest slider value
+      const buffer = device.createBuffer({
+        size: Math.ceil(def.capacity) * 32,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, // COPY_SRC: ?debug readback
+      });
+      const prepPipeline = device.createComputePipeline({
+        layout: 'auto',
+        compute: { module, entryPoint: def.prep },
+      });
+      const bind = (p, binding) =>
+        device.createBindGroup({
+          layout: p.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.ubo } },
+            { binding, resource: { buffer } },
+          ],
+        });
+      return {
+        buffer,
+        capacity: def.capacity,
+        pipeline,
+        prepPipeline,
+        bindGroup: bind(pipeline, def.readBinding),
+        prepBindGroup: bind(prepPipeline, def.writeBinding),
+      };
+    };
+    this.snow = layer({
+      vertex: 'vsSnow',
+      fragment: 'fsSnow',
+      prep: 'snowPrep',
+      readBinding: 13,
+      writeBinding: 14,
+      capacity: SNOW.count * SNOW_AMOUNT_MAX,
     });
-    // two vec4s per speck, sized for the largest slider value
-    this.snowBuf = device.createBuffer({
-      size: Math.ceil(SNOW.count * SNOW_AMOUNT_MAX) * 32,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, // COPY_SRC: ?debug readback
-    });
-    this.snowBindGroup = device.createBindGroup({
-      layout: this.snowPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.ubo } },
-        { binding: 13, resource: { buffer: this.snowBuf } },
-      ],
-    });
-    this.snowPrepPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module, entryPoint: 'snowPrep' },
-    });
-    this.snowPrepBindGroup = device.createBindGroup({
-      layout: this.snowPrepPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.ubo } },
-        { binding: 14, resource: { buffer: this.snowBuf } },
-      ],
+    this.bubbles = layer({
+      vertex: 'vsBubble',
+      fragment: 'fsBubble',
+      prep: 'bubblePrep',
+      readBinding: 15,
+      writeBinding: 16,
+      capacity: BUBBLES.count * BUBBLE_AMOUNT_MAX,
     });
     this.surfaceBindGroup = device.createBindGroup({
       layout: this.surfacePipeline.getBindGroupLayout(0),
@@ -346,7 +371,15 @@ export class FishRenderer {
   }
 
   // Per-layer switches for profiling (the viewer exposes them under ?debug).
-  layers = { floor: true, fish: true, surface: true, floorCaustics: true, cull: true, snow: true };
+  layers = {
+    floor: true,
+    fish: true,
+    surface: true,
+    floorCaustics: true,
+    cull: true,
+    snow: true,
+    bubbles: true,
+  };
 
   // `time` (seconds) is the real clock; the wave clock follows it at the wave-speed setting.
   render(boids, time) {
@@ -463,13 +496,31 @@ export class FishRenderer {
       compute.dispatchWorkgroups(Math.ceil(boids.count / WORKGROUP_SIZE));
       compute.end();
     }
-    const snowCount = Math.min(Math.round(SNOW.count * this.snowAmount), SNOW.count * SNOW_AMOUNT_MAX);
-    const drawSnow = this.layers.snow && snowCount > 0 && eye[1] < surfaceY;
-    if (drawSnow) {
+    // particle layers, only from under the water
+    const underwater = eye[1] < surfaceY;
+    const particles = [
+      {
+        layer: this.snow,
+        n:
+          this.layers.snow && underwater
+            ? Math.min(Math.round(SNOW.count * this.snowAmount), this.snow.capacity)
+            : 0,
+      },
+      {
+        layer: this.bubbles,
+        n:
+          this.layers.bubbles && underwater
+            ? Math.min(Math.round(BUBBLES.count * this.bubbleAmount), this.bubbles.capacity)
+            : 0,
+      },
+    ].filter((p) => p.n > 0);
+    if (particles.length > 0) {
       const prep = enc.beginComputePass();
-      prep.setPipeline(this.snowPrepPipeline);
-      prep.setBindGroup(0, this.snowPrepBindGroup);
-      prep.dispatchWorkgroups(Math.ceil(snowCount / WORKGROUP_SIZE));
+      for (const { layer, n } of particles) {
+        prep.setPipeline(layer.prepPipeline);
+        prep.setBindGroup(0, layer.prepBindGroup);
+        prep.dispatchWorkgroups(Math.ceil(n / WORKGROUP_SIZE));
+      }
       prep.end();
     }
     const canvasTex = this.ctx.getCurrentTexture();
@@ -508,10 +559,10 @@ export class FishRenderer {
       pass.setVertexBuffer(0, this.meshes.full.vbo);
       pass.drawIndirect(this.drawArgs, 16);
     }
-    if (drawSnow) {
-      pass.setPipeline(this.snowPipeline);
-      pass.setBindGroup(0, this.snowBindGroup);
-      pass.draw(6, snowCount);
+    for (const { layer, n } of particles) {
+      pass.setPipeline(layer.pipeline);
+      pass.setBindGroup(0, layer.bindGroup);
+      pass.draw(6, n);
     }
     if (this.layers.surface) {
       pass.setPipeline(this.surfacePipeline);

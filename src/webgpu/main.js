@@ -9,6 +9,7 @@ import {
   DEFAULT_LOOK_HEIGHT,
   DEFAULT_MURKINESS,
   DEFAULT_SHAFT_STRENGTH,
+  DEFAULT_BUBBLE_AMOUNT,
   DEFAULT_SNOW_AMOUNT,
   DEFAULT_VIGNETTE,
   DEFAULT_WAVES,
@@ -39,6 +40,7 @@ const settings = {
   murkiness: DEFAULT_MURKINESS,
   shafts: DEFAULT_SHAFT_STRENGTH,
   snow: DEFAULT_SNOW_AMOUNT,
+  bubbles: DEFAULT_BUBBLE_AMOUNT,
   vignette: DEFAULT_VIGNETTE,
   waveHeight: DEFAULT_WAVES.height,
   waveScale: DEFAULT_WAVES.scale,
@@ -167,6 +169,7 @@ async function main() {
       ['surface', 'draw surface'],
       ['floor', 'draw sea floor'],
       ['snow', 'draw marine snow'],
+      ['bubbles', 'draw bubbles'],
       ['cull', 'frustum culling'],
       ['floorCaustics', 'sand caustics'],
     ]) {
@@ -230,6 +233,7 @@ async function main() {
     renderer.murkiness = settings.murkiness;
     renderer.shaftStrength = settings.shafts;
     renderer.snowAmount = settings.snow;
+    renderer.bubbleAmount = settings.bubbles;
     renderer.vignette = settings.vignette;
     renderer.waveHeight = settings.waveHeight;
     renderer.waveScale = settings.waveScale;

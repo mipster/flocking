@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TANK_HALF } from '../species.js';
 import {
+  BUBBLES,
   CELL_SIZE,
   LIGHT_DIRECTION,
   RIPPLES,
@@ -63,6 +64,7 @@ describe('wgslHeader', () => {
   it('injects the species count and refractive index the shaders rely on', () => {
     expect(header).toContain('const SPECIES_COUNT = 3u;');
     expect(header).toContain('const WATER_IOR = 1.33;');
+    expect(header).toContain(`const BUBBLE_VENTS = ${BUBBLES.vents}u;`);
   });
 });
 

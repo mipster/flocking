@@ -206,6 +206,43 @@ export const DEFAULT_WAVES = { height: 1, scale: 1, speed: 1 };
 export const WAVE_SCALE_MAX = 1.5;
 
 /**
+ * Bubbles: streams rising from fixed vents on the sand. Like marine snow, a bubble's place is a
+ * pure function of its index and the time, so there is no state and fish pass straight through.
+ * - count: bubbles at slider value 1, shared out evenly between the vents
+ * - vents: number of emitters, scattered over the tank floor by a fixed hash
+ * - margin: how far in from the tank edge a vent may sit
+ * - size: [smallest, largest] bubble radius in world units (skewed toward small)
+ * - growth: extra radius gained by the surface, as a fraction (they expand as pressure drops)
+ * - riseBase / riseGain: rise speed = base + gain * radius, in world units per second
+ * - gap: longest pause before a bubble restarts at its vent, in seconds
+ * - spread: random horizontal scatter of a stream around its vent
+ * - wobble: sideways sway amplitude at the surface; frequency in radians per second
+ * - popTime / popSwell: the pop at the surface lasts this long (s) and swells the bubble by this fraction
+ * - fadeIn: seconds to fade in at the vent
+ * - minAngle: far bubbles are drawn at least this many radians wide (and fainter)
+ */
+export const BUBBLES = {
+  count: 2400,
+  vents: 32,
+  margin: 12,
+  size: [0.06, 0.26],
+  growth: 0.5,
+  riseBase: 2.4,
+  riseGain: 17.6,
+  gap: 6,
+  spread: 0.5,
+  wobble: 0.9,
+  wobbleRate: 3.2,
+  popTime: 0.25,
+  popSwell: 0.6,
+  fadeIn: 0.3,
+  minAngle: 0.0011,
+};
+export const DEFAULT_BUBBLE_AMOUNT = 1;
+/** Largest value of the bubbles slider; the per-bubble buffer is sized for it. */
+export const BUBBLE_AMOUNT_MAX = 2;
+
+/**
  * Marine snow: drifting specks that give the water scale and depth. Each speck's position is a
  * pure function of its index and the time (no simulation), wrapped inside a box that follows the
  * camera, and lit like everything else, brighter where it crosses a beam.
@@ -350,6 +387,20 @@ ${vecConsts('SAND', SAND_LOOK)}
 ${vecConsts('BACKDROP', BACKDROP)}
 ${vecConsts('SKY', SKY)}
 const FRESNEL_F0 = ${FRESNEL_F0};
+const BUBBLE_VENTS = ${BUBBLES.vents}u;
+const BUBBLE_MARGIN = ${BUBBLES.margin};
+const BUBBLE_SIZE = vec2f(${BUBBLES.size.join(', ')});
+const BUBBLE_GROWTH = ${BUBBLES.growth};
+const BUBBLE_RISE_BASE = ${BUBBLES.riseBase};
+const BUBBLE_RISE_GAIN = ${BUBBLES.riseGain};
+const BUBBLE_GAP = ${BUBBLES.gap};
+const BUBBLE_SPREAD = ${BUBBLES.spread};
+const BUBBLE_WOBBLE = ${BUBBLES.wobble};
+const BUBBLE_WOBBLE_RATE = ${BUBBLES.wobbleRate};
+const BUBBLE_POP_TIME = ${BUBBLES.popTime};
+const BUBBLE_POP_SWELL = ${BUBBLES.popSwell};
+const BUBBLE_FADE_IN = ${BUBBLES.fadeIn};
+const BUBBLE_MIN_ANGLE = ${BUBBLES.minAngle};
 const SNOW_COLOR = vec3f(${SNOW.color.join(', ')});
 const SNOW_OPACITY = ${SNOW.opacity};
 const SNOW_SWAY_RATE = ${SNOW.swayRate};

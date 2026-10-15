@@ -27,6 +27,9 @@ struct RU {
 // marine snow: per-speck placement and look written by snowPrep (compute) and read by vsSnow
 @group(0) @binding(13) var<storage, read> snow: array<vec4f>;
 @group(0) @binding(14) var<storage, read_write> snowOut: array<vec4f>;
+// bubbles: per-bubble placement and look written by bubblePrep (compute) and read by vsBubble
+@group(0) @binding(15) var<storage, read> bubbles: array<vec4f>;
+@group(0) @binding(16) var<storage, read_write> bubblesOut: array<vec4f>;
 // fishShade (compute) only: writable views of the same data, bound with `pos`, SP and the uniforms
 @group(0) @binding(5) var<storage, read_write> shadeOut: array<vec4f>;
 @group(0) @binding(7) var<storage, read_write> visibleSimpleOut: array<u32>;
@@ -416,6 +419,94 @@ fn vsSnow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> S
 fn fsSnow(in: SnowOut) -> @location(0) vec4f {
   let a = smoothstep(1.0, 0.25, length(in.uv)) * in.alpha;
   return vec4f(in.col * a, a);
+}
+
+// ---- bubbles ----------------------------------------------------------------------
+
+// Per-bubble work, once per bubble and frame. Bubbles are shared out between fixed vents on the
+// sand; each has its own size, rise speed, pause before restarting and phase, and its place is a
+// pure function of those and the time. Writes [world position xyz, radius] and [colour rgb,
+// opacity] (opacity 0 = hidden: waiting at the vent, or already popped).
+@compute @workgroup_size(WORKGROUP_SIZE)
+fn bubblePrep(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i * 2u + 1u >= arrayLength(&bubblesOut)) { return; }
+  let t = R.camPos.w;
+  let vent = i % BUBBLE_VENTS;
+  let half = R.tank.xyz;
+  let vx = (snowHash(vent, 20.0) * 2.0 - 1.0) * (half.x - BUBBLE_MARGIN);
+  let vz = (snowHash(vent, 21.0) * 2.0 - 1.0) * (half.z - BUBBLE_MARGIN);
+  let ground = floorY(vec2f(vx, vz), half);
+
+  // many small bubbles, a few big ones
+  let s = snowHash(i, 22.0);
+  let size = mix(BUBBLE_SIZE.x, BUBBLE_SIZE.y, s * s);
+  let speed = BUBBLE_RISE_BASE + BUBBLE_RISE_GAIN * size;
+  let rise = max(R.tank.w - ground, 1.0);
+  let travel = rise / speed;
+  let cycle = travel + BUBBLE_GAP * snowHash(i, 23.0);
+  let age = fract(t / cycle + snowHash(i, 24.0)) * cycle;
+  if (age > travel) {
+    bubblesOut[i * 2u + 1u] = vec4f(0.0); // waiting at the vent
+    return;
+  }
+
+  let up = age / travel; // 0 at the vent, 1 at the surface
+  let wobblePhase = snowHash(i, 25.0) * 6.2831853;
+  let sway = BUBBLE_WOBBLE * (0.2 + up) * vec2f(
+    sin(age * BUBBLE_WOBBLE_RATE + wobblePhase),
+    cos(age * BUBBLE_WOBBLE_RATE * 0.83 + wobblePhase * 1.7));
+  let scatter = BUBBLE_SPREAD * vec2f(snowHash(i, 26.0) - 0.5, snowHash(i, 27.0) - 0.5);
+  let p = vec3f(vx + scatter.x + sway.x, ground + speed * age, vz + scatter.y + sway.y);
+
+  // fade in at the vent, swell on the way up, pop (a quick swell and fade) at the surface
+  let remaining = travel - age;
+  let pop = clamp(remaining / BUBBLE_POP_TIME, 0.0, 1.0);
+  let radius = size * (1.0 + BUBBLE_GROWTH * up) * (1.0 + BUBBLE_POP_SWELL * (1.0 - pop));
+  let dist = distance(p, R.camPos.xyz);
+  let wide = max(radius, BUBBLE_MIN_ANGLE * dist);
+  let dl = depthLight(p.y);
+  let alpha = smoothstep(0.0, BUBBLE_FADE_IN, age) * pop * sqrt(radius / wide);
+
+  bubblesOut[i * 2u] = vec4f(p, wide);
+  bubblesOut[i * 2u + 1u] = vec4f(underwater(vec3f(1.0), dl.sun, dl.veil, dist), alpha);
+}
+
+@vertex
+fn vsBubble(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SnowOut {
+  let place = bubbles[ii * 2u];
+  let look = bubbles[ii * 2u + 1u];
+  var o: SnowOut;
+  o.uv = vec2f(0.0);
+  o.col = look.rgb;
+  o.alpha = look.a;
+  if (look.a <= 0.0) {
+    o.clip = vec4f(0.0, 0.0, -2.0, 1.0);
+    return o;
+  }
+  var corners = array<vec2f, 6>(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+    vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+  let c = corners[vi];
+  o.clip = R.viewProj * vec4f(place.xyz + (R.camRight.xyz * c.x + R.camUp.xyz * c.y) * place.w, 1.0);
+  o.uv = c;
+  return o;
+}
+
+// A bubble is mostly clear: a thin bright rim, a faint body, a sharp highlight facing the sun and a
+// weaker one on the opposite side (light that crossed the bubble and reflected off its far wall).
+@fragment
+fn fsBubble(in: SnowOut) -> @location(0) vec4f {
+  let r = length(in.uv);
+  let rim = smoothstep(0.6, 0.95, r) * (1.0 - smoothstep(0.96, 1.0, r));
+  let body = 0.08 * (1.0 - smoothstep(0.9, 1.0, r));
+  var toLight = vec2f(dot(R.light.xyz, R.camRight.xyz), dot(R.light.xyz, R.camUp.xyz));
+  toLight = toLight / max(length(toLight), 0.001);
+  let spot = 1.0 - smoothstep(0.0, 0.25, length(in.uv - toLight * 0.5));
+  let echo = 1.0 - smoothstep(0.0, 0.3, length(in.uv + toLight * 0.5));
+  let a = clamp(body + 0.5 * rim + 0.9 * spot + 0.3 * echo, 0.0, 1.0) * in.alpha;
+  let col = mix(in.col, vec3f(1.0), clamp(spot + 0.4 * echo, 0.0, 1.0));
+  return vec4f(col * a, a);
 }
 
 // ---- vignette ------------------------------------------------------------------
