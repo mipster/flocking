@@ -1,5 +1,7 @@
 import renderWGSL from './render.wgsl?raw';
 import { buildFishVertices } from './fishGeometry.js';
+import { buildSceneryMesh, buildSeaweedData, SCENERY_VERTEX_FLOATS } from './sceneryMesh.js';
+import { sphereInFrustum } from './frustum.js';
 import { causticsWGSL } from './caustics.js';
 import { FLOOR, floorMeshGrid, floorWGSL } from './floor.js';
 import { packRenderSpecies, packRenderUniforms, RENDER_UNIFORM_FLOATS } from './layout.js';
@@ -7,6 +9,7 @@ import {
   BUBBLE_AMOUNT_MAX,
   BUBBLES,
   CAMERA,
+  SEAWEED,
   DEFAULT_MURKINESS,
   DEFAULT_SHAFT_STRENGTH,
   DEFAULT_BUBBLE_AMOUNT,
@@ -29,6 +32,9 @@ import {
 const DEPTH_FORMAT = 'depth24plus';
 const DEFAULT_SAMPLES = 4; // WebGPU allows 1 or 4
 const SHAFT_FORMAT = 'rgba16float';
+/** Per-pixel distance to the nearest scenery, at shaft resolution (see fsShaft). */
+const RANGE_FORMAT = 'r32float';
+const NO_SCENERY_RANGE = 1e9;
 
 // column-major 4x4 helpers (WebGPU clip space: z in [0, 1])
 function perspective(fovy, aspect, near, far) {
@@ -160,6 +166,64 @@ export class FishRenderer {
       depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
       multisample: { count: this.samples },
     });
+    // scenery: rock/coral mesh from the CPU, seaweed ribbons built in the vertex shader
+    const rockVertex = {
+      module,
+      entryPoint: 'vsRock',
+      buffers: [
+        {
+          arrayStride: SCENERY_VERTEX_FLOATS * 4,
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: 'float32x3' },
+            { shaderLocation: 1, offset: 12, format: 'float32x3' },
+            { shaderLocation: 2, offset: 24, format: 'float32x3' },
+          ],
+        },
+      ],
+    };
+    this.rockPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: rockVertex,
+      fragment: { module, entryPoint: 'fsRock', targets: [{ format: this.format }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
+      multisample: { count: this.samples },
+    });
+    this.rockBindGroup = device.createBindGroup({
+      layout: this.rockPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
+    });
+    this.weedPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsWeed' },
+      fragment: { module, entryPoint: 'fsWeed', targets: [{ format: this.format }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
+      multisample: { count: this.samples },
+    });
+    // the same geometry again at shaft resolution, writing distance instead of colour (see shafts)
+    const rangeTarget = { format: RANGE_FORMAT };
+    const rangeDepth = { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' };
+    this.rockRangePipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: rockVertex,
+      fragment: { module, entryPoint: 'fsRockRange', targets: [rangeTarget] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: rangeDepth,
+    });
+    this.rockRangeBindGroup = device.createBindGroup({
+      layout: this.rockRangePipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
+    });
+    this.weedRangePipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsWeed' },
+      fragment: { module, entryPoint: 'fsWeedRange', targets: [rangeTarget] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: rangeDepth,
+    });
+    this.scenery = null;
+
     // backdrop gradient, drawn first and never writing depth
     this.bgPipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -296,10 +360,6 @@ export class FishRenderer {
       layout: this.vignettePipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: this.ubo } }],
     });
-    this.shaftBindGroup = device.createBindGroup({
-      layout: this.shaftPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: this.ubo } }],
-    });
     this.shaftSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
 
     this.shadePipeline = device.createComputePipeline({
@@ -332,6 +392,8 @@ export class FishRenderer {
     this.colorTex?.destroy();
     this.depthTex?.destroy();
     this.shaftTex?.destroy();
+    this.rangeTex?.destroy();
+    this.rangeDepthTex?.destroy();
     const usage = GPUTextureUsage.RENDER_ATTACHMENT;
     // without multisampling the scene is drawn straight into the canvas texture
     this.colorTex =
@@ -348,6 +410,20 @@ export class FishRenderer {
       size: [Math.max(1, Math.round(w * SHAFTS.scale)), Math.max(1, Math.round(h * SHAFTS.scale))],
       format: SHAFT_FORMAT,
       usage: usage | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const shaftSize = [this.shaftTex.width, this.shaftTex.height];
+    this.rangeTex = this.device.createTexture({
+      size: shaftSize,
+      format: RANGE_FORMAT,
+      usage: usage | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.rangeDepthTex = this.device.createTexture({ size: shaftSize, format: DEPTH_FORMAT, usage });
+    this.shaftBindGroup = this.device.createBindGroup({
+      layout: this.shaftPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.ubo } },
+        { binding: 18, resource: this.rangeTex.createView() },
+      ],
     });
     this.compositeBindGroup = this.device.createBindGroup({
       layout: this.compositePipeline.getBindGroupLayout(0),
@@ -370,6 +446,68 @@ export class FishRenderer {
     this.device.queue.writeBuffer(this.spBuf, 0, packRenderSpecies(this.species));
   }
 
+  /**
+   * Builds the GPU data for generated scenery (see scenery.js): a rock/coral triangle mesh and the
+   * seaweed plant list. Meshing runs on the CPU and takes a moment; call it when the scenery or the
+   * tank changes, not per frame.
+   */
+  setScenery(scenery, half) {
+    const { device } = this;
+    this.scenery?.vbo.destroy();
+    this.scenery?.weed.destroy();
+    const { vertices: verts, ranges } = buildSceneryMesh(scenery, half);
+    const plants = buildSeaweedData(scenery);
+    const vbo = device.createBuffer({
+      size: Math.max(verts.byteLength, 16),
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(vbo, 0, verts);
+    const weed = device.createBuffer({
+      size: Math.max(plants.byteLength, 32),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(weed, 0, plants);
+    const weedGroup = (pipeline) =>
+      device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: this.ubo } },
+          { binding: 17, resource: { buffer: weed } },
+        ],
+      });
+    this.scenery = {
+      vbo,
+      weed,
+      ranges,
+      plantCount: scenery.seaweed.length,
+      weedBindGroup: weedGroup(this.weedPipeline),
+      weedRangeBindGroup: weedGroup(this.weedRangePipeline),
+    };
+  }
+
+  // Draws rock/coral (one draw per visible feature and tank-width copy; the copy index rides in
+  // firstInstance) and seaweed, with the colour pipelines or (`range`) the distance-writing ones.
+  drawScenery(pass, scenery, viewProj, half, range) {
+    if (!scenery) return;
+    if (scenery.ranges.length > 0) {
+      pass.setPipeline(range ? this.rockRangePipeline : this.rockPipeline);
+      pass.setBindGroup(0, range ? this.rockRangeBindGroup : this.rockBindGroup);
+      pass.setVertexBuffer(0, scenery.vbo);
+      const w = half[0] * 2;
+      for (const { first, count, c, radius } of scenery.ranges) {
+        for (let copy = 0; copy < 3; copy++) {
+          const centre = [c[0] + (copy - 1) * w, c[1], c[2]];
+          if (sphereInFrustum(viewProj, centre, radius)) pass.draw(count, 1, first, copy);
+        }
+      }
+    }
+    if (scenery.plantCount > 0) {
+      pass.setPipeline(range ? this.weedRangePipeline : this.weedPipeline);
+      pass.setBindGroup(0, range ? scenery.weedRangeBindGroup : scenery.weedBindGroup);
+      pass.draw(SEAWEED.blades * SEAWEED.segments * 6, scenery.plantCount * 3);
+    }
+  }
+
   // Per-layer switches for profiling (the viewer exposes them under ?debug).
   layers = {
     floor: true,
@@ -379,6 +517,7 @@ export class FishRenderer {
     cull: true,
     snow: true,
     bubbles: true,
+    scenery: true,
   };
 
   // `time` (seconds) is the real clock; the wave clock follows it at the wave-speed setting.
@@ -455,11 +594,12 @@ export class FishRenderer {
     const view = lookAt(eye, [0, this.targetY, 0], [0, 1, 0]);
     const tanHalfY = 1 / proj[5];
 
+    const viewProj = mul(proj, view);
     device.queue.writeBuffer(
       this.ubo,
       0,
       packRenderUniforms({
-        viewProj: mul(proj, view),
+        viewProj,
         light: LIGHT_DIRECTION,
         absorption: WATER.absorption.map((a) => a * this.murkiness),
         half,
@@ -549,6 +689,8 @@ export class FishRenderer {
       pass.setBindGroup(0, this.floorBindGroup);
       pass.draw(cols * rows * 6);
     }
+    const scenery = this.layers.scenery ? this.scenery : null;
+    this.drawScenery(pass, scenery, viewProj, half, false);
     if (this.layers.fish) {
       pass.setPipeline(this.pipeline);
       // survivors of the culling pass; instance counts live in drawArgs
@@ -572,6 +714,26 @@ export class FishRenderer {
     pass.end();
 
     if (useShafts) {
+      // where the beams must stop: distance to rock, coral and seaweed (fish are ignored)
+      const range = enc.beginRenderPass({
+        colorAttachments: [
+          {
+            view: this.rangeTex.createView(),
+            clearValue: { r: NO_SCENERY_RANGE, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          },
+        ],
+        depthStencilAttachment: {
+          view: this.rangeDepthTex.createView(),
+          depthClearValue: 1,
+          depthLoadOp: 'clear',
+          depthStoreOp: 'discard',
+        },
+      });
+      this.drawScenery(range, scenery, viewProj, half, true);
+      range.end();
+
       const shafts = enc.beginRenderPass({
         colorAttachments: [
           {

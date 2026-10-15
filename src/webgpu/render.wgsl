@@ -303,6 +303,9 @@ fn fsShaft(in: BgOut) -> @location(0) vec4f {
   let rayLen = length(ray);
   var tEnd = SHAFT_RANGE / rayLen;
   if (ray.y > 0.0) { tEnd = min(tEnd, max(R.tank.w - R.camPos.y, 0.0) / ray.y); }
+  // beams stop at rock and coral: without this the march runs through them to the floor behind
+  let blocker = textureLoad(rangeTex, vec2i(in.clip.xy), 0).r;
+  tEnd = min(tEnd, blocker / rayLen);
   if (tEnd <= 0.0) { return vec4f(0.0); }
 
   let jitter = interleavedNoise(in.clip.xy);
@@ -662,4 +665,128 @@ fn fsSurface(in: SurfaceOut) -> @location(0) vec4f {
     alpha = 1.0;
   }
   return vec4f(color * in.edge, alpha * in.edge);
+}
+
+// ---- scenery ----------------------------------------------------------------------
+// Rock and coral are one mesh built on the CPU from the scenery distance field. It is drawn three
+// times, one tank width apart (like the floor), so formations wrap with the flock.
+
+struct RockOut {
+  @builtin(position) clip: vec4f,
+  @location(0) nrm: vec3f,
+  @location(1) col: vec3f,
+  @location(2) wp: vec3f,
+  @location(3) dist: f32,
+  @location(4) sun: vec3f,
+  @location(5) veil: vec3f,
+};
+
+@vertex
+fn vsRock(
+  @location(0) p: vec3f,
+  @location(1) n: vec3f,
+  @location(2) c: vec3f,
+  @builtin(instance_index) ii: u32,
+) -> RockOut {
+  let wp = p + vec3f((f32(ii) - 1.0) * R.tank.x * 2.0, 0.0, 0.0);
+  let dl = depthLight(wp.y);
+  var o: RockOut;
+  o.clip = R.viewProj * vec4f(wp, 1.0);
+  o.nrm = n;
+  o.col = c;
+  o.wp = wp;
+  o.dist = distance(wp, R.camPos.xyz);
+  o.sun = dl.sun;
+  o.veil = dl.veil;
+  return o;
+}
+
+@fragment
+fn fsRock(in: RockOut) -> @location(0) vec4f {
+  let n = normalize(in.nrm);
+  let lambert = max(dot(n, R.light.xyz), 0.0);
+  let hemi = n.y * 0.5 + 0.5;
+  // mottling: low-frequency noise so large faces are not flat colour
+  let grain = 1.0 - SCENERY_DETAIL + SCENERY_DETAIL * 2.0 * noise3(in.wp * SCENERY_DETAIL_SCALE);
+  let col = in.col * grain * (SCENERY_AMBIENT + SCENERY_HEMISPHERE * hemi + SCENERY_DIFFUSE * lambert);
+  return vec4f(underwater(col, in.sun * floorCaustic(in.wp), in.veil, in.dist), 1.0);
+}
+
+// Seaweed: every plant is a few ribbon blades, built in the vertex shader from the plant's
+// position, height and phase. Blades bend with height squared (a fixed base, a free tip).
+@group(0) @binding(17) var<storage, read> weed: array<vec4f>;
+// distance from the eye to the nearest rock, coral or seaweed per shaft-image pixel (huge where none)
+@group(0) @binding(18) var rangeTex: texture_2d<f32>;
+
+struct WeedOut {
+  @builtin(position) clip: vec4f,
+  @location(0) col: vec3f,
+  @location(1) wp: vec3f,
+  @location(2) dist: f32,
+  @location(3) sun: vec3f,
+  @location(4) veil: vec3f,
+};
+
+@vertex
+fn vsWeed(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> WeedOut {
+  let copy = ii % 3u;
+  let plant = ii / 3u;
+  let a = weed[plant * 2u];
+  let b = weed[plant * 2u + 1u];
+  let perBlade = SEAWEED_SEGMENTS * 6u;
+  let blade = vi / perBlade;
+  let q = (vi % perBlade) / 6u;
+  let corner = vi % 6u;
+  var cx = array<f32, 6>(0.0, 1.0, 0.0, 1.0, 1.0, 0.0);
+  var cy = array<u32, 6>(0u, 0u, 1u, 0u, 1u, 1u);
+  let side = cx[corner] * 2.0 - 1.0;
+  let t = f32(q + cy[corner]) / f32(SEAWEED_SEGMENTS);
+
+  let id = plant * 8u + blade;
+  let yaw = snowHash(id, 31.0) * 6.2831853;
+  let offset = (vec2f(snowHash(id, 32.0), snowHash(id, 33.0)) - 0.5) * 2.0 * SEAWEED_SPREAD;
+  let height = a.w * (0.65 + 0.5 * snowHash(id, 34.0));
+  let width = SEAWEED_WIDTH * (1.0 - 0.85 * t);
+  let phase = b.x + snowHash(id, 35.0) * 3.0;
+  let clock = R.waves.w * SEAWEED_SWAY_RATE;
+  // a slow swell along the current plus a faster flutter across it
+  let bend = t * t * SEAWEED_SWAY;
+  let along = sin(clock + phase + t * 1.3) + 0.35 * sin(clock * 2.3 + phase * 1.7);
+  let across = 0.4 * sin(clock * 1.7 + phase * 2.1 + t * 2.0);
+  let current = vec2f(0.94, 0.34);
+  let sway = (current * along + vec2f(-current.y, current.x) * across) * bend;
+
+  let perp = vec2f(-sin(yaw), cos(yaw));
+  let xz = a.xz + offset + sway + perp * side * width * 0.5
+    + vec2f((f32(copy) - 1.0) * R.tank.x * 2.0, 0.0);
+  let wp = vec3f(xz.x, a.y - 0.2 + t * height, xz.y);
+
+  let dl = depthLight(wp.y);
+  var o: WeedOut;
+  o.clip = R.viewProj * vec4f(wp, 1.0);
+  o.col = mix(SEAWEED_BASE, SEAWEED_TIP, t);
+  o.wp = wp;
+  o.dist = distance(wp, R.camPos.xyz);
+  o.sun = dl.sun;
+  o.veil = dl.veil;
+  return o;
+}
+
+@fragment
+fn fsWeed(in: WeedOut) -> @location(0) vec4f {
+  // ribbons are thin: light them as if facing the sun a little, with no sharp terminator
+  let col = in.col * (SEAWEED_AMBIENT + SEAWEED_DIFFUSE * (0.5 + 0.5 * R.light.y));
+  return vec4f(underwater(col, in.sun * floorCaustic(in.wp), in.veil, in.dist), 1.0);
+}
+
+// Depth-only twins of the scenery shaders: they write the distance to the nearest surface into the
+// shaft pass's range image, so light shafts can stop at it.
+@fragment
+fn fsRockRange(in: RockOut) -> @location(0) vec4f {
+  return vec4f(in.dist, 0.0, 0.0, 1.0);
+}
+
+@fragment
+fn fsWeedRange(in: WeedOut) -> @location(0) vec4f {
+  return vec4f(in.dist, 0.0, 0.0, 1.0);
 }

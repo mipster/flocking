@@ -359,6 +359,71 @@ export const GLINT = { sharpness: 40, color: [1.0, 0.95, 0.8] };
 /** Multiplier on the absorption coefficients; the viewer exposes it as a slider. */
 export const DEFAULT_MURKINESS = 1;
 
+/**
+ * Scenery: rock formations (boulders, arches, caves), coral and seaweed placed on the sand by a
+ * seeded generator (scenery.js). Counts are per 10,000 square world units of tank floor.
+ * - margin: how far in from the front/back walls a feature may sit
+ * - gap: minimum clear space between neighbouring features
+ * - smooth: blend radius when parts of one feature merge (rounds the joins)
+ */
+export const SCENERY = {
+  seed: 7,
+  margin: 14,
+  gap: 6,
+  smooth: 1.5,
+  density: { boulder: 2.5, arch: 0.7, cave: 0.5, branching: 4, fan: 3, weedPatch: 6 },
+};
+
+/**
+ * Scenery meshing and look. Rock and coral are meshed from the distance field on a grid of
+ * `rockCell` / `coralCell` units (coral is thin, so it needs finer cells); `belowSand` is how far
+ * under the sand the grid reaches, enough that no hole shows where a formation meets the floor.
+ * Vertex colours come from a two-colour palette per kind, picked by the feature's `tone`;
+ * upward-facing rock is tinted toward `algae`.
+ */
+export const SCENERY_MESH = { rockCell: 0.8, coralCell: 0.4, belowSand: 1.2 };
+export const SCENERY_COLORS = {
+  boulder: [
+    [0.34, 0.31, 0.28],
+    [0.52, 0.47, 0.41],
+  ],
+  arch: [
+    [0.38, 0.34, 0.3],
+    [0.56, 0.5, 0.43],
+  ],
+  cave: [
+    [0.28, 0.27, 0.27],
+    [0.44, 0.41, 0.38],
+  ],
+  branching: [
+    [0.86, 0.34, 0.24],
+    [0.97, 0.62, 0.36],
+  ],
+  fan: [
+    [0.66, 0.24, 0.5],
+    [0.88, 0.46, 0.66],
+  ],
+  algae: [0.2, 0.34, 0.15],
+};
+export const SCENERY_LOOK = { ambient: 0.3, hemisphere: 0.3, diffuse: 0.95, detail: 0.35, detailScale: 1.6 };
+
+/**
+ * Seaweed: ribbon blades, `segments` quads tall, `blades` per plant. Blades sway on the wave
+ * clock; `sway` is the tip's sideways travel in units and `swayRate` its angular speed.
+ */
+export const SEAWEED = {
+  blades: 4,
+  segments: 8,
+  width: 0.4,
+  spread: 0.6,
+  sway: 1.3,
+  swayRate: 0.9,
+  base: [0.08, 0.2, 0.07],
+  tip: [0.34, 0.56, 0.16],
+  ambient: 0.45,
+  diffuse: 0.7,
+};
+
 /** Sea floor mesh: covers `tiles` tank widths in each direction, one vertex every `spacing` units. */
 export const FLOOR_MESH = { tiles: 3, spacing: 3, maxCells: 500 };
 
@@ -401,6 +466,21 @@ const BUBBLE_POP_TIME = ${BUBBLES.popTime};
 const BUBBLE_POP_SWELL = ${BUBBLES.popSwell};
 const BUBBLE_FADE_IN = ${BUBBLES.fadeIn};
 const BUBBLE_MIN_ANGLE = ${BUBBLES.minAngle};
+const SCENERY_AMBIENT = ${SCENERY_LOOK.ambient};
+const SCENERY_HEMISPHERE = ${SCENERY_LOOK.hemisphere};
+const SCENERY_DIFFUSE = ${SCENERY_LOOK.diffuse};
+const SCENERY_DETAIL = ${SCENERY_LOOK.detail};
+const SCENERY_DETAIL_SCALE = ${SCENERY_LOOK.detailScale};
+const SEAWEED_BLADES = ${SEAWEED.blades}u;
+const SEAWEED_SEGMENTS = ${SEAWEED.segments}u;
+const SEAWEED_WIDTH = ${SEAWEED.width};
+const SEAWEED_SPREAD = ${SEAWEED.spread};
+const SEAWEED_SWAY = ${SEAWEED.sway};
+const SEAWEED_SWAY_RATE = ${SEAWEED.swayRate};
+const SEAWEED_BASE = vec3f(${SEAWEED.base.join(', ')});
+const SEAWEED_TIP = vec3f(${SEAWEED.tip.join(', ')});
+const SEAWEED_AMBIENT = ${SEAWEED.ambient};
+const SEAWEED_DIFFUSE = ${SEAWEED.diffuse};
 const SNOW_COLOR = vec3f(${SNOW.color.join(', ')});
 const SNOW_OPACITY = ${SNOW.opacity};
 const SNOW_SWAY_RATE = ${SNOW.swayRate};

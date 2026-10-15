@@ -7,6 +7,7 @@ import {
   BRUTE_FORCE_MAX,
   CAMERA,
   DEFAULT_LOOK_HEIGHT,
+  SCENERY,
   DEFAULT_MURKINESS,
   DEFAULT_SHAFT_STRENGTH,
   DEFAULT_BUBBLE_AMOUNT,
@@ -17,6 +18,7 @@ import {
   FRAMES_IN_FLIGHT,
   TANK_LIMITS,
 } from './config.js';
+import { generateScenery } from './scenery.js';
 import { DEFAULT_PRESET, PRESETS, PRESET_KEYS, PRESET_RANGES, applyPreset } from './presets.js';
 
 /** Longest frame interval (seconds) counted in the on-screen stats. */
@@ -45,6 +47,7 @@ const settings = {
   waveHeight: DEFAULT_WAVES.height,
   waveScale: DEFAULT_WAVES.scale,
   waveSpeed: DEFAULT_WAVES.speed,
+  scenerySeed: SCENERY.seed,
   preset: DEFAULT_PRESET,
   lookHeight: DEFAULT_LOOK_HEIGHT,
   smoothing: DEFAULT_STEERING_SMOOTHING,
@@ -81,6 +84,18 @@ async function main() {
       smoothing: settings.smoothing,
     });
     if (DEBUG) window.__boids = boids; // console inspection: open the page with ?debug
+    buildScenery();
+  }
+
+  // Scenery depends only on the seed and the tank size, so it is rebuilt (meshed on the CPU) only
+  // when one of those changed, not on every fish-count change.
+  let sceneryKey = '';
+  function buildScenery(force = false) {
+    const half = boids.half;
+    const key = `${settings.scenerySeed}:${half.join(',')}`;
+    if (!force && key === sceneryKey) return;
+    sceneryKey = key;
+    renderer.setScenery(generateScenery(half, { seed: settings.scenerySeed }), half);
   }
 
   const gui = new GUI({ title: 'Fish flock (WebGPU)' });
@@ -156,6 +171,16 @@ async function main() {
     const [min, max, label] = PRESET_RANGES[key];
     look.add(settings, key, min, max, 0.05).name(label).onChange(markCustom);
   }
+  const scene = gui.addFolder('Scenery');
+  scene.add(
+    {
+      regenerate() {
+        settings.scenerySeed = Math.floor(Math.random() * 1e6);
+        buildScenery();
+      },
+    },
+    'regenerate'
+  );
   g.add(settings, 'lookHeight', -30, 40, 1).name('camera looks at height');
   g.add(settings, 'mediumCount', 0, 20000, 1).name('medium fish').onFinishChange(rebuild);
   g.add(settings, 'largeCount', 0, 2000, 1).name('large fish').onFinishChange(rebuild);
@@ -170,6 +195,7 @@ async function main() {
       ['floor', 'draw sea floor'],
       ['snow', 'draw marine snow'],
       ['bubbles', 'draw bubbles'],
+      ['scenery', 'draw scenery'],
       ['cull', 'frustum culling'],
       ['floorCaustics', 'sand caustics'],
     ]) {
