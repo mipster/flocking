@@ -60,6 +60,30 @@ export const SPECIES = [
   },
 ];
 
+// Starlings for the murmuration page (starlings.html). One species fills all three sim slots; the
+// hawk is not a flock member but an external predator driven from the CPU. Distances are roughly
+// metres: birds keep ~1 m apart, align with birds a few metres away and fly at 12-14 m/s.
+export const STARLING = {
+  name: 'Starling',
+  color: '#1c1626',
+  scale: 0.3,
+  maxSpeed: 14,
+  maxForce: 34,
+  sepRadius: 1.4,
+  aliRadius: 3.0,
+  cohRadius: 4.5,
+  sepWeight: 1.8,
+  aliWeight: 1.5,
+  cohWeight: 0.9,
+  fearRadius: 0,
+  fearWeight: 0,
+  huntRadius: 0,
+  huntWeight: 0,
+  wander: 0.06,
+  farCohesion: 0.8,
+  glint: 0,
+};
+
 // default absolute numbers of medium / large fish; the rest are small
 export const DEFAULT_COUNTS = { medium: 300, large: 8 };
 // default tank half extents (x width, y height, z depth); height is fixed, floor and surface are barriers

@@ -3,15 +3,18 @@
 // Floats only, in vec4 groups, so there is no padding to get wrong.
 import { SPECIES_COUNT } from './config.js';
 
-/** Total floats in the simulation `Params` uniform (4 x vec4f). */
-export const SIM_PARAMS_FLOATS = 16;
+/** Total floats in the simulation `Params` uniform (7 x vec4f). */
+export const SIM_PARAMS_FLOATS = 28;
 
 /**
  * sim.wgsl `Params`:
  *   a      = (delta, time, count, maxPerCell)
  *   bounds = (half.x, half.y, half.z, wallMargin)
  *   grid   = (cellSize, nx, ny, nz)
- *   flags  = (wrap, steering blend per step, 0, 0)
+ *   flags  = (wrap, steering blend per step, minimum speed fraction, predator fear weight)
+ *   home       = (centre xyz, pull strength; 0 = no home region)
+ *   homeRadius = (ellipsoid radii xyz, 0)
+ *   predator   = (position xyz, fear radius; 0 = no predator)
  */
 export function packSimParams({
   dt,
@@ -24,6 +27,9 @@ export function packSimParams({
   dims,
   wrap,
   smoothing,
+  minSpeed = 0.4,
+  home = null,
+  predator = null,
 }) {
   // exponential low-pass: fraction of the new force blended in each step (1 = smoothing off)
   const blend = smoothing > 0 ? 1 - Math.exp(-dt / smoothing) : 1;
@@ -42,8 +48,11 @@ export function packSimParams({
     dims[2],
     wrap ? 1 : 0,
     blend,
-    0,
-    0,
+    minSpeed,
+    predator ? predator.weight : 0,
+    ...(home ? [...home.center, home.strength] : [0, 0, 0, 0]),
+    ...(home ? [...home.radius, 0] : [1, 1, 1, 0]),
+    ...(predator ? [...predator.position, predator.radius] : [0, 0, 0, 0]),
   ]);
 }
 
@@ -55,7 +64,7 @@ export const SIM_SPECIES_STRIDE = 16;
  *   [maxSpeed, maxForce, sepRadius, aliRadius]
  *   [cohRadius, sepWeight, aliWeight, cohWeight]
  *   [fearRadius, fearWeight, huntRadius, huntWeight]
- *   [wander, scale, 0, 0]
+ *   [wander, scale, farCohesion, 0]   (farCohesion is optional, default 0)
  */
 export function packSimSpecies(species) {
   const out = new Float32Array(SPECIES_COUNT * SIM_SPECIES_STRIDE);
@@ -76,7 +85,7 @@ export function packSimSpecies(species) {
         s.huntWeight,
         s.wander,
         s.scale,
-        0,
+        s.farCohesion ?? 0,
         0,
       ],
       i * SIM_SPECIES_STRIDE
@@ -149,5 +158,32 @@ export function packRenderUniforms({
   out.set([...camera.position, time], 44);
   out.set([vignette, 0, 0, 0], 48);
   out.set([waves.height, waves.scale, 0, waves.clock], 52);
+  return out;
+}
+
+/** Floats in the starling page's `SU` uniform (mat4 + 6 x vec4f). */
+export const STARLING_UNIFORM_FLOATS = 40;
+
+/**
+ * starlings.wgsl `SU`:
+ *   viewProj : mat4x4f (column-major)
+ *   camRight = (right xyz, tan(fov/2) * aspect)
+ *   camUp    = (up xyz, tan(fov/2))
+ *   camFwd   = (forward xyz, time in seconds)
+ *   camPos   = (camera position xyz, viewport height in pixels)
+ *   hawk     = (position xyz, 1 while flying / 0)
+ *   hawkDir  = (unit heading xyz, wing phase in radians)
+ */
+export function packStarlingUniforms({ viewProj, camera, time, viewportHeight, hawk = null }) {
+  const out = new Float32Array(STARLING_UNIFORM_FLOATS);
+  out.set(viewProj, 0);
+  out.set([...camera.right, camera.tanHalfX], 16);
+  out.set([...camera.up, camera.tanHalfY], 20);
+  out.set([...camera.forward, time], 24);
+  out.set([...camera.position, viewportHeight], 28);
+  if (hawk) {
+    out.set([...hawk.position, 1], 32);
+    out.set([...hawk.direction, hawk.phase], 36);
+  }
   return out;
 }

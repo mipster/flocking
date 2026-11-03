@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Then open http://localhost:5173. A production build is available with `npm run build`.
+Then open http://localhost:5173 for the fish, or http://localhost:5173/starlings.html for the starling murmuration. A production build is available with `npm run build`.
 
 Requires a browser with WebGPU (Chrome, Edge or Brave 113+ on macOS, Windows and ChromeOS) and Node 20.19 or newer (22.12+ also works) to run the dev server.
 
@@ -90,6 +90,19 @@ Three species, each with its own speed, force limit and flocking weights:
 - **Vignette**: a final full-screen pass multiplies the frame by a factor that falls toward the corners (`VIGNETTE` in `config.js`); the **vignette** slider scales it, and 0 skips the pass.
 - **Glint**: small fish flash a tight sun specular off their flanks as they cross the light (per-species **glint** slider; it rides on the caustic-lit sunlight, so it pulses with the caustics).
 
+## Starling murmuration
+
+`/starlings.html` is a side demo: a starling flock wheeling over a lake at dusk, broken up now and then by a hawk diving through it. It is meant to look like a painting, so the camera is fixed.
+
+- **Same simulation as the fish.** `GpuBoids` runs one species in all three slots, with three generic hooks that leave the fish unchanged by default:
+  - a **home region** (a soft ellipsoid whose centre drifts slowly) that pulls the flock back when it strays;
+  - a **minimum speed** (starlings never hover);
+  - an **external predator** position and fear radius, set from the CPU each frame.
+- **Far cohesion** (species `farCohesion`, grid mode). Each bird compares how many birds sit in the 26 grid cells two cells away and steers toward the fuller side. Without it, local cohesion collapses the flock into separate balls. With it, the flock stays one body with sharp edges, like real murmurations, where each bird follows its few nearest neighbours however far away they are.
+- **Hawk** (`raptor.js`): a scripted curved pass. It starts high to one side, dives through a point near the flock and climbs away. It aims where the flock will be when it arrives, using the mean position and velocity of 256 birds read back from the GPU every half second (`flockSampler.js`). Birds within its fear radius flee at once, and the rest pick up the turn through alignment, which sends a wave through the flock.
+- **Look** (`starlings.wgsl`): the sky gradient, low sun, two hill ranges, the lake (a rippled reflection with the sun's glitter path) and the reeds are all painted as functions of view direction in full-screen passes. Birds are dark soft specks flapping on the sim's wingbeat phase, some gliding. Specks never shrink below about a pixel, getting fainter instead, so dense parts pile up into solid black and distant birds fade slightly into the sky.
+- **Panel**: starling count, speed, roost pull, hawk on/off, a "send the hawk now" button, the hawk's fear radius and strength, and the starling steering parameters. Tuning lives in `src/starlings/config.js`, and the species in `src/species.js`.
+
 ## Project layout
 
 ```
@@ -111,6 +124,8 @@ src/webgpu/FishRenderer.js   passes: backdrop, floor, scenery, culled fish, snow
 src/webgpu/render.wgsl       all render shaders (water, fish, floor, surface, shafts, snow, bubbles, scenery)
 src/webgpu/fishGeometry.js   low-poly fish meshes (full and simple)
 src/bench.js                 benchmark runner
+src/webgpu/mat4.js           column-major matrix helpers shared by both viewers
+src/starlings/               murmuration page: config, hawk, flock sampler, renderer, shader, viewer
 ```
 
 ## Roadmap

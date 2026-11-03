@@ -13,6 +13,8 @@ viewer and `/bench.html` for the benchmark.
 - `src/webgpu/floor.js`: sea floor height, as JS reference plus the generated WGSL twin.
 - `src/webgpu/GpuBoids.js`: buffers, pipelines and per-frame compute passes. `sim.wgsl`: the shader.
 - `src/webgpu/FishRenderer.js` / `render.wgsl`: drawing. `main.js`: viewer wiring.
+- `src/starlings/`: the starling murmuration page (`/starlings.html`). It reuses `GpuBoids`; its own tuning is in
+  `src/starlings/config.js` and its uniform packing in `layout.js`, like the fish.
 
 ## Rules
 

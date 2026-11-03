@@ -80,6 +80,8 @@ export class GpuBoids {
       half = DEFAULT_HALF,
       wrap = true,
       smoothing = DEFAULT_STEERING_SMOOTHING,
+      minSpeed = 0.4,
+      spawn = null,
     } = {}
   ) {
     this.device = device;
@@ -87,11 +89,18 @@ export class GpuBoids {
     this.mode = mode;
     this.maxPerCell = maxPerCell;
     this.smoothing = smoothing; // steering low-pass time constant in seconds; 0 disables
+    this.minSpeed = minSpeed; // slowest speed as a fraction of maxSpeed
+    // optional, set per frame by the caller: { center, radius: [x, y, z], strength } and
+    // { position, radius, weight } (see packSimParams)
+    this.home = null;
+    this.predator = null;
     // x and z must be whole numbers of grid cells so the wrap seam lines up with a cell edge
     const snap = (h) => (Math.ceil((2 * h) / CELL_SIZE) * CELL_SIZE) / 2;
     this.half = [snap(half[0]), half[1], snap(half[2])];
     this.wrap = wrap; // true: fish leaving the left/right edge re-enter opposite; false: soft side walls
     this.counts = counts;
+    // where to scatter the flock at the start: { center, radius: [x, y, z] }, or the whole tank
+    this.spawn = spawn ?? { center: [0, 0, 0], radius: this.half.map((h, i) => h * [0.8, 0.7, 0.8][i]) };
     this.count = counts[0] + counts[1] + counts[2];
     this.time = 0;
 
@@ -145,9 +154,8 @@ export class GpuBoids {
     for (let i = 0; i < n; i++) {
       const sp = i < nS ? 0 : i < nS + nM ? 1 : 2;
       const o = i * 4;
-      posData[o] = (Math.random() * 2 - 1) * this.half[0] * 0.8;
-      posData[o + 1] = (Math.random() * 2 - 1) * this.half[1] * 0.7;
-      posData[o + 2] = (Math.random() * 2 - 1) * this.half[2] * 0.8;
+      const { center, radius } = this.spawn;
+      for (let k = 0; k < 3; k++) posData[o + k] = center[k] + (Math.random() * 2 - 1) * radius[k];
       posData[o + 3] = sp;
       const u = Math.random() * 2 - 1;
       const a = Math.random() * Math.PI * 2;
@@ -185,6 +193,9 @@ export class GpuBoids {
         dims: this.dims,
         wrap: this.wrap,
         smoothing: this.smoothing,
+        minSpeed: this.minSpeed,
+        home: this.home,
+        predator: this.predator,
       })
     );
 

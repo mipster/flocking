@@ -6,6 +6,14 @@
 export const CELL_SIZE = 8;
 
 /**
+ * Far cohesion (species `farCohesion` > 0, grid mode only): a fish or bird compares the number of
+ * its own kind in the 26 cells this many cells away and steers toward the fuller side. It is a
+ * cheap stand-in for the long-range pull of a few nearest neighbours however far away they are,
+ * which keeps one big flock together instead of letting it break into balls.
+ */
+export const FAR_COHESION_CELLS = 2;
+
+/**
  * Tank footprint the viewer allows (world units). The grid's prefix sum runs on one GPU thread over
  * every cell, so its cost follows the footprint, not the fish count: at these maxima it is about
  * 60k keys, which keeps that pass well under a millisecond.
@@ -446,6 +454,7 @@ export function wgslHeader() {
   const table = waveTable();
   return `
 const WORKGROUP_SIZE = ${WORKGROUP_SIZE}u;
+const FAR_COHESION_CELLS = ${FAR_COHESION_CELLS};
 const SPECIES_COUNT = ${SPECIES_COUNT}u;
 ${vecConsts('FISH', FISH_LOOK)}
 ${vecConsts('SAND', SAND_LOOK)}

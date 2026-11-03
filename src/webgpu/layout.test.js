@@ -3,6 +3,8 @@ import { SPECIES } from '../species.js';
 import {
   RENDER_SPECIES_STRIDE,
   RENDER_UNIFORM_FLOATS,
+  STARLING_UNIFORM_FLOATS,
+  packStarlingUniforms,
   SIM_PARAMS_FLOATS,
   SIM_SPECIES_STRIDE,
   hexToRgb,
@@ -27,9 +29,31 @@ describe('packSimParams', () => {
   };
   const p = packSimParams(base);
 
-  it('fills exactly four vec4s', () => {
+  it('fills exactly seven vec4s', () => {
     expect(p.length).toBe(SIM_PARAMS_FLOATS);
-    expect(SIM_PARAMS_FLOATS).toBe(16);
+    expect(SIM_PARAMS_FLOATS).toBe(28);
+  });
+
+  it('defaults to the fish behaviour: 40% minimum speed, no home region, no predator', () => {
+    expect(p[14]).toBeCloseTo(0.4, 6); // flags.z
+    expect(p[15]).toBe(0); // flags.w
+    expect(p[19]).toBe(0); // home.w = off
+    expect(Array.from(p.slice(20, 23))).toEqual([1, 1, 1]); // homeRadius never divides by zero
+    expect(p[27]).toBe(0); // predator.w = none
+  });
+
+  it('places the home region, predator and minimum speed', () => {
+    const q = packSimParams({
+      ...base,
+      minSpeed: 0.75,
+      home: { center: [1, 2, 3], radius: [40, 15, 30], strength: 0.8 },
+      predator: { position: [5, 6, 7], radius: 14, weight: 4 },
+    });
+    expect(q[14]).toBeCloseTo(0.75, 6);
+    expect(q[15]).toBe(4);
+    expect(Array.from(q.slice(16, 20))).toEqual([1, 2, 3, expect.closeTo(0.8, 6)]);
+    expect(Array.from(q.slice(20, 24))).toEqual([40, 15, 30, 0]);
+    expect(Array.from(q.slice(24, 28))).toEqual([5, 6, 7, 14]);
   });
 
   it('places fields where sim.wgsl reads them', () => {
@@ -70,6 +94,7 @@ describe('packSimSpecies', () => {
       expect(out[o + 8]).toBeCloseTo(s.fearRadius); // vec4 2: fearRadius
       expect(out[o + 12]).toBeCloseTo(s.wander); // vec4 3: wander
       expect(out[o + 13]).toBeCloseTo(s.scale); // vec4 3: scale
+      expect(out[o + 14]).toBe(s.farCohesion ?? 0); // vec4 3: far cohesion, off for fish
     });
   });
 });
@@ -154,5 +179,36 @@ describe('packRenderUniforms', () => {
     expect(Array.from(out.slice(36, 40))).toEqual([0, 1, 0, expect.closeTo(0.5, 6)]);
     expect(Array.from(out.slice(40, 44))).toEqual([0, 0, -1, 1]); // forward, sand caustics on
     expect(Array.from(out.slice(44, 48))).toEqual([5, 42, 9, 7.5]);
+  });
+});
+
+describe('packStarlingUniforms', () => {
+  const camera = {
+    right: [1, 0, 0],
+    up: [0, 1, 0],
+    forward: [0, 0, -1],
+    position: [0, 2, 175],
+    tanHalfX: 0.7,
+    tanHalfY: 0.4,
+  };
+  const args = { viewProj: new Float32Array(16).fill(2), camera, time: 3.5, viewportHeight: 900 };
+
+  it('is the size starlings.wgsl expects, with the camera where it reads it', () => {
+    const out = packStarlingUniforms(args);
+    expect(out.length).toBe(STARLING_UNIFORM_FLOATS);
+    expect(out[0]).toBe(2);
+    expect(Array.from(out.slice(16, 20))).toEqual([1, 0, 0, expect.closeTo(0.7, 6)]);
+    expect(Array.from(out.slice(20, 24))).toEqual([0, 1, 0, expect.closeTo(0.4, 6)]);
+    expect(Array.from(out.slice(24, 28))).toEqual([0, 0, -1, 3.5]);
+    expect(Array.from(out.slice(28, 32))).toEqual([0, 2, 175, 900]);
+  });
+
+  it('marks the hawk absent unless it is flying', () => {
+    expect(packStarlingUniforms(args)[35]).toBe(0);
+    const out = packStarlingUniforms({
+      ...args,
+      hawk: { position: [4, 5, 6], direction: [0, 0, 1], phase: 2 },
+    });
+    expect(Array.from(out.slice(32, 40))).toEqual([4, 5, 6, 1, 0, 0, 1, 2]);
   });
 });

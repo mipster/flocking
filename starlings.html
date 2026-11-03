@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Starling Murmuration (WebGPU)</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #2a2238;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+      #stats,
+      #msg {
+        position: fixed;
+        left: 10px;
+        bottom: 10px;
+        padding: 6px 10px;
+        font:
+          12px/1.4 ui-monospace,
+          Menlo,
+          monospace;
+        color: #f3e6ff;
+        background: rgba(30, 20, 40, 0.45);
+        border-radius: 6px;
+        pointer-events: none;
+        white-space: pre;
+      }
+      #msg {
+        top: 10px;
+        bottom: auto;
+        color: #ffb4b4;
+        display: none;
+      }
+      #nav {
+        position: fixed;
+        left: 10px;
+        top: 10px;
+        font:
+          12px ui-monospace,
+          Menlo,
+          monospace;
+      }
+      #nav a {
+        color: #f6d9ff;
+        margin-right: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="nav"><a href="/">fish</a></div>
+    <div id="stats"></div>
+    <div id="msg"></div>
+    <script type="module" src="/src/starlings/main.js"></script>
+  </body>
+</html>

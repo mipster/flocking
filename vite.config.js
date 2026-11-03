@@ -8,6 +8,7 @@ export default defineConfig({
       input: {
         main: resolve(import.meta.dirname, 'index.html'),
         bench: resolve(import.meta.dirname, 'bench.html'),
+        starlings: resolve(import.meta.dirname, 'starlings.html'),
       },
     },
   },

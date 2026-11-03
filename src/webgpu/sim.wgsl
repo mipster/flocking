@@ -7,7 +7,11 @@ struct Params {
   a: vec4f,      // delta, time, count, maxPerCell
   bounds: vec4f, // tank half extents xyz, wall margin
   grid: vec4f,   // cellSize, nx, ny, nz
-  flags: vec4f,  // x = wrap left/right (1) or soft side walls (0), y = steering blend per step (1 = no smoothing)
+  flags: vec4f,  // x = wrap left/right (1) or soft side walls (0), y = steering blend per step (1 = no smoothing),
+                 // z = minimum speed as a fraction of maxSpeed, w = fear weight of the external predator
+  home: vec4f,       // centre xyz of a soft region the flock is pulled back into, w = pull strength (0 = off)
+  homeRadius: vec4f, // ellipsoid radii of that region xyz
+  predator: vec4f,   // external predator position xyz (not part of the flock), w = fear radius (0 = none)
 };
 
 fn wrapOn() -> bool { return P.flags.x > 0.5; }
@@ -35,7 +39,7 @@ fn minImage(d: vec3f) -> vec3f {
 
 @group(0) @binding(0) var<uniform> P: Params;
 // per species, 4 x vec4: [maxSpeed, maxForce, sepR, aliR] [cohR, sepW, aliW, cohW]
-//                        [fearR, fearW, huntR, huntW]     [wander, scale, 0, 0]
+//                        [fearR, fearW, huntR, huntW]     [wander, scale, farCohesion, 0]
 @group(0) @binding(1) var<uniform> SPEC: array<vec4f, SPECIES_COUNT * 4u>;
 @group(0) @binding(2) var<storage, read_write> pos: array<vec4f>;   // xyz, species
 @group(0) @binding(3) var<storage, read_write> vel: array<vec4f>;   // xyz, swim phase
@@ -57,6 +61,7 @@ struct Me {
 struct Acc {
   sep: vec3f, ali: vec3f, coh: vec3f, fear: vec3f, hunt: vec3f,
   aliN: f32, cohN: f32, huntN: f32,
+  far: vec3f, // density imbalance around me, 0..1 in length (grid mode only)
 };
 
 fn loadMe(i: u32) -> Me {
@@ -126,6 +131,9 @@ fn integrate(i: u32, m: Me, a: Acc) {
   force += pushAway(a.fear, m.maxForce * 2.0) * s2.y;
   if (a.huntN > 0.0) { force += steer(a.hunt / a.huntN - m.pos, m.vel, m.maxSpeed, m.maxForce) * s2.w; }
 
+  // far cohesion: head for the fuller side when the flock around me is lopsided
+  if (s3.z > 0.0) { force += steer(a.far, m.vel, m.maxSpeed, m.maxForce) * length(a.far) * s3.z; }
+
   // lazy wander with a per-fish phase offset
   let id = fract(f32(i) * 0.6180339887) * 100.0;
   let wd = vec3f(sin(t * 0.40 + id * 6.1), sin(t * 0.31 + id * 3.7), cos(t * 0.27 + id * 9.3));
@@ -138,6 +146,27 @@ fn integrate(i: u32, m: Me, a: Acc) {
   if (alpha < 1.0) {
     force = mix(smoothAccel[i].xyz, force, alpha);
     smoothAccel[i] = vec4f(force, 0.0);
+  }
+
+  // home region: inside the ellipsoid the flock roams freely; outside, the pull back grows with
+  // distance, so the edge of the flock bulges and folds instead of hitting a wall
+  if (P.home.w > 0.0) {
+    let q = (m.pos - P.home.xyz) / P.homeRadius.xyz;
+    let outside = length(q) - 1.0;
+    if (outside > 0.0) {
+      force += steer(P.home.xyz - m.pos, m.vel, m.maxSpeed, m.maxForce) * min(outside, 1.0) * P.home.w;
+    }
+  }
+
+  // external predator (driven from the CPU): flee with proximity-weighted strength. Added after the
+  // low-pass so the closest birds react at once; the rest pick it up through alignment, which is
+  // what sends a wave through the flock.
+  if (P.predator.w > 0.0) {
+    let d = m.pos - P.predator.xyz;
+    let dist = length(d);
+    if (dist < P.predator.w && dist > 1e-4) {
+      force += (d / dist) * (1.0 - dist / P.predator.w) * m.maxForce * P.flags.w;
+    }
   }
 
   // soft tank walls
@@ -155,7 +184,7 @@ fn integrate(i: u32, m: Me, a: Acc) {
   var v = m.vel + force * dt;
   var speed = length(v);
   if (speed < 1e-4) { v = vec3f(1.0, 0.0, 0.0) * m.maxSpeed * 0.5; speed = length(v); }
-  v = v * (clamp(speed, m.maxSpeed * 0.4, m.maxSpeed) / speed);
+  v = v * (clamp(speed, m.maxSpeed * P.flags.z, m.maxSpeed) / speed);
   speed = length(v);
 
   let phase = (m.phase + dt * (3.0 + speed * 1.2 / m.scale)) % TAU;
@@ -338,6 +367,29 @@ fn steerGrid(@builtin(global_invocation_id) gid: vec3u) {
         }
       }
     }
+  }
+
+  // far cohesion: count my own kind in the 26 cells FAR_COHESION_CELLS away and point toward
+  // the fuller side, scaled by how lopsided it is (inside a flock the counts balance out)
+  if (SPEC[m.sp * 4u + 3u].z > 0.0) {
+    var g = vec3f(0.0);
+    var total = 0.0;
+    for (var dz = -1; dz <= 1; dz++) {
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx == 0 && dy == 0 && dz == 0) { continue; }
+          let dir = vec3i(dx, dy, dz);
+          var cc = c0 + dir * FAR_COHESION_CELLS;
+          if (wrap) { cc.x = wrapIdx(cc.x, dims.x); }
+          if (any(cc < vec3i(0)) || any(cc >= dims)) { continue; }
+          let key = u32((cc.z * dims.y + cc.y) * dims.x + cc.x) * SPECIES_COUNT + m.sp;
+          let n = f32(cellStart[key + 1u] - cellStart[key]);
+          g += normalize(vec3f(dir)) * n;
+          total += n;
+        }
+      }
+    }
+    if (total > 0.0) { acc.far = g / total; }
   }
   integrate(i, m, acc);
 }
