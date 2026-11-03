@@ -69,7 +69,7 @@ describe('wgslHeader', () => {
 });
 
 describe('TANK_LIMITS', () => {
-  it('bounds the grid size so the single-thread prefix sum stays small', () => {
+  it('bounds the grid size so the prefix sum over every cell stays small', () => {
     const cells =
       Math.ceil(TANK_LIMITS.maxWidth / CELL_SIZE) *
       Math.ceil((2 * TANK_HALF[1]) / CELL_SIZE) *

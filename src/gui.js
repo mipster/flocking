@@ -17,6 +17,7 @@ export function addSpeciesFolders(gui, species) {
     f.add(s, 'huntWeight', 0, 3, 0.05);
     f.add(s, 'wander', 0, 1, 0.01);
     if ('farCohesion' in s) f.add(s, 'farCohesion', 0, 4, 0.05).name('far cohesion');
+    if ('neighbours' in s) f.add(s, 'neighbours', 1, 20, 1).name('nearest neighbours');
     f.add(s, 'glint', 0, 3, 0.05).name('glint (sun sparkle)');
     f.close();
   }

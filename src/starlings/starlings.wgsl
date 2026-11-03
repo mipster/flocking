@@ -14,6 +14,10 @@ struct SU {
 @group(0) @binding(0) var<uniform> U: SU;
 @group(0) @binding(1) var<storage, read> pos: array<vec4f>;
 @group(0) @binding(2) var<storage, read> vel: array<vec4f>;
+@group(0) @binding(3) var<storage, read> avgVel: array<vec4f>; // running average, see bank.wgsl
+// the flock mirrored in the lake, as coverage in .r (drawn each frame before the background)
+@group(0) @binding(4) var reflectTex: texture_2d<f32>;
+@group(0) @binding(5) var reflectSampler: sampler;
 
 // ---- noise -----------------------------------------------------------------------
 
@@ -85,8 +89,25 @@ fn land(d: vec3f) -> vec3f {
   return sky(d);
 }
 
-// full background: land above the horizon, the lake below it reflecting land and sun
-fn scene(d: vec3f) -> vec3f {
+// How much of the mirrored flock covers this bit of water: the reflection texture read through the
+// same ripples as the rest of the lake, smeared vertically like a reflection on slightly moving water.
+// `uv` is the screen position (0..1, y down).
+fn flockReflection(uv: vec2f, az: f32, depth: f32, t: f32) -> f32 {
+  let wobble = (noise2(vec2f(az * 60.0, depth * 400.0 - t * 0.6)) - 0.5) * REFLECT_RIPPLE;
+  // a small tent blur: 5 taps down the streak, 3 across (one reflection texel apart)
+  let texel = 1.0 / vec2f(textureDimensions(reflectTex));
+  var ink = 0.0;
+  for (var k = -2; k <= 2; k++) {
+    for (var j = -1; j <= 1; j++) {
+      let at = uv + vec2f(wobble + f32(j) * texel.x, f32(k) * REFLECT_STREAK * 0.5);
+      ink += textureSampleLevel(reflectTex, reflectSampler, at, 0.0).r * (3.0 - abs(f32(k))) * (2.0 - abs(f32(j)));
+    }
+  }
+  return ink / 36.0;
+}
+
+// full background: land above the horizon, the lake below it reflecting land, sun and flock
+fn scene(d: vec3f, uv: vec2f) -> vec3f {
   let e = elevation(d);
   if (e >= 0.0) { return land(d); }
   let depth = -e;
@@ -101,6 +122,8 @@ fn scene(d: vec3f) -> vec3f {
   let column = exp(-abs(az - SCENE_SUN_AZIMUTH) / (0.004 + depth * 0.12));
   let dashes = smoothstep(0.45, 0.75, noise2(vec2f(az * 260.0, depth * 1400.0 - t * 1.5)));
   col += SCENE_SUN_COLOR * column * dashes * 0.9 * (1.0 - smoothstep(0.0, 0.2, depth));
+  // the flock overhead, mirrored (it also blocks the sun's glints where it passes in front)
+  col = mix(col, BIRD_COLOR * SCENE_WATER, saturate(flockReflection(uv, az, depth, t) * REFLECT_STRENGTH));
   // the lake darkens toward the viewer, where it reflects the darker sky overhead
   return col * (1.0 - 0.35 * smoothstep(0.0, 0.3, depth));
 }
@@ -161,7 +184,8 @@ fn viewRay(ndc: vec2f) -> vec3f {
 
 @fragment
 fn fsBg(in: BgOut) -> @location(0) vec4f {
-  return vec4f(scene(viewRay(in.ndc)), 1.0);
+  let uv = vec2f(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
+  return vec4f(scene(viewRay(in.ndc), uv), 1.0);
 }
 
 @fragment
@@ -181,8 +205,9 @@ struct BirdOut {
 };
 
 // A camera-facing quad at world point `p`, spanning `span` x `thick` metres across and along the
-// heading as seen on screen, never smaller than BIRD_MIN_PIXELS (fainter instead).
-fn speck(p: vec3f, heading: vec3f, span: f32, thick: f32, corner: vec2f, minPx: f32) -> BirdOut {
+// heading as seen on screen, never smaller than `minPx` (fainter instead). `shade` adds the haze
+// colour; the reflection pass only needs coverage, so it skips that sky lookup.
+fn speck(p: vec3f, heading: vec3f, span: f32, thick: f32, corner: vec2f, minPx: f32, shade: bool) -> BirdOut {
   let c = U.viewProj * vec4f(p, 1.0);
   let ahead = U.viewProj * vec4f(p + heading, 1.0);
   let height = U.camPos.w;
@@ -202,9 +227,12 @@ fn speck(p: vec3f, heading: vec3f, span: f32, thick: f32, corner: vec2f, minPx: 
   o.uv = corner;
   // keep the ink a speck puts down roughly equal to its true size
   o.alpha = min(1.0, (spanPx * thickPx) / (s * t) * 1.5);
-  // distant birds take on a little of the sky behind them
-  let haze = 1.0 - exp(-c.w * BIRD_HAZE);
-  o.col = mix(BIRD_COLOR, land(normalize(p - U.camPos.xyz)), haze);
+  o.col = BIRD_COLOR;
+  if (shade) {
+    // distant birds take on a little of the sky behind them
+    let haze = 1.0 - exp(-c.w * BIRD_HAZE);
+    o.col = mix(BIRD_COLOR, land(normalize(p - U.camPos.xyz)), haze);
+  }
   return o;
 }
 
@@ -212,41 +240,94 @@ const CORNERS = array<vec2f, 6>(
   vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
   vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
 
-@vertex
-fn vsBird(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> BirdOut {
+// a point reflected in the lake surface; directions reflect by flipping y (MIRROR)
+fn mirrorPoint(p: vec3f) -> vec3f { return vec3f(p.x, 2.0 * WATER_Y - p.y, p.z); }
+const MIRROR = vec3f(1.0, -1.0, 1.0);
+
+// One bird as a speck. `mirror` draws its reflection instead: the bird flipped through the lake
+// surface (position, velocity and gravity), seen by the same camera.
+fn birdSpeck(vi: u32, ii: u32, mirror: bool, minPx: f32) -> BirdOut {
+  let flip = select(vec3f(1.0), MIRROR, mirror);
+  let p = select(pos[ii].xyz, mirrorPoint(pos[ii].xyz), mirror);
   let v = vel[ii];
-  let speed = length(v.xyz);
-  let heading = select(vec3f(1.0, 0.0, 0.0), v.xyz / speed, speed > 1e-4);
+  let vel3 = v.xyz * flip;
+  let speed = length(vel3);
+  let heading = select(vec3f(1.0, 0.0, 0.0), vel3 / speed, speed > 1e-4);
   // wings: open and close with the sim's wingbeat phase, except for birds currently gliding
   let gliding = step(1.0 - BIRD_GLIDE, noise1(f32(ii) * 0.37 + U.camFwd.w * 0.5));
   let beat = abs(sin(v.w));
   let wings = mix(1.0 - BIRD_FLAP * (1.0 - beat), 1.0, gliding);
-  var o = speck(pos[ii].xyz, heading, BIRD_WINGSPAN * wings, BIRD_THICKNESS, CORNERS[vi], BIRD_MIN_PIXELS);
+
+  // Bank: lift must hold the bird up and pull it round the turn, so the wing normal leans from
+  // vertical toward the turn. Seen from the camera the wings then show their face (dark) or their
+  // edge (faint), which is what draws the rolling bands across a turning murmuration.
+  // An exponential average lags a steady turn by its time constant, so this is the smoothed turn.
+  let accel = (vel3 - avgVel[ii].xyz * flip) / BIRD_BANK_SMOOTHING;
+  let up = vec3f(0.0, 1.0, 0.0) * flip;
+  let lift = (accel - heading * dot(accel, heading)) + (up - heading * dot(up, heading)) * BIRD_BANK_GRAVITY;
+  let normal = lift / max(length(lift), 1e-4); // zero only in a vertical climb with no turn
+  let toCam = normalize(U.camPos.xyz - p);
+  let facing = abs(dot(normal, toCam));
+  // a wing pointing at the camera foreshortens to little more than the body
+  let wingAxis = cross(heading, normal);
+  let spanSeen = max(sqrt(max(0.0, 1.0 - dot(wingAxis, toCam) * dot(wingAxis, toCam))), 0.3);
+  let thick = mix(BIRD_EDGE_THICKNESS, BIRD_THICKNESS, facing);
+  var o = speck(p, heading, BIRD_WINGSPAN * wings * spanSeen, thick, CORNERS[vi], minPx, !mirror);
   o.alpha *= BIRD_OPACITY;
   return o;
 }
 
+@vertex
+fn vsBird(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> BirdOut {
+  return birdSpeck(vi, ii, false, BIRD_MIN_PIXELS);
+}
+
+@vertex
+fn vsBirdReflection(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> BirdOut {
+  return birdSpeck(vi, ii, true, REFLECT_MIN_PIXELS);
+}
+
+// soft oval: tiny on screen, so only the falloff matters
+fn birdCoverage(in: BirdOut) -> f32 {
+  return clamp(1.4 * (1.0 - length(in.uv)), 0.0, 1.0) * in.alpha;
+}
+
 @fragment
 fn fsBird(in: BirdOut) -> @location(0) vec4f {
-  // soft oval: tiny on screen, so only the falloff matters
-  let r = length(in.uv);
-  let a = clamp(1.4 * (1.0 - r), 0.0, 1.0) * in.alpha;
+  let a = birdCoverage(in);
   return vec4f(in.col * a, a);
+}
+
+// reflection pass: coverage only, in .r (the lake supplies the colour)
+@fragment
+fn fsBirdCoverage(in: BirdOut) -> @location(0) vec4f {
+  let a = birdCoverage(in);
+  return vec4f(a, 0.0, 0.0, a);
 }
 
 // ---- hawk -------------------------------------------------------------------------------
 
-@vertex
-fn vsHawk(@builtin(vertex_index) vi: u32) -> BirdOut {
-  var o = speck(U.hawk.xyz, U.hawkDir.xyz, HAWK_WINGSPAN, HAWK_WINGSPAN, CORNERS[vi], 4.0);
+fn hawkSpeck(vi: u32, mirror: bool) -> BirdOut {
+  let p = select(U.hawk.xyz, mirrorPoint(U.hawk.xyz), mirror);
+  let dir = U.hawkDir.xyz * select(vec3f(1.0), MIRROR, mirror);
+  var o = speck(p, dir, HAWK_WINGSPAN, HAWK_WINGSPAN, CORNERS[vi], 4.0, !mirror);
   if (U.hawk.w < 0.5) { o.clip = vec4f(0.0, 0.0, -2.0, 1.0); }
   return o;
 }
 
+@vertex
+fn vsHawk(@builtin(vertex_index) vi: u32) -> BirdOut {
+  return hawkSpeck(vi, false);
+}
+
+@vertex
+fn vsHawkReflection(@builtin(vertex_index) vi: u32) -> BirdOut {
+  return hawkSpeck(vi, true);
+}
+
 // Raptor silhouette in quad space (x across the wings, y along the heading): a slim body and two
 // long wings swept slightly back, their tips rising and falling with the wingbeat.
-@fragment
-fn fsHawk(in: BirdOut) -> @location(0) vec4f {
+fn hawkCoverage(in: BirdOut) -> f32 {
   let p = in.uv;
   let ax = abs(p.x);
   let body = 1.0 - smoothstep(0.08, 0.14, length(vec2f(p.x * 2.4, p.y * 0.55)));
@@ -255,6 +336,17 @@ fn fsHawk(in: BirdOut) -> @location(0) vec4f {
   let chord = 0.2 * (1.0 - ax * 0.7);
   let wing = (1.0 - smoothstep(chord * 0.7, chord, abs(p.y - wingY))) * (1.0 - smoothstep(0.9, 1.0, ax));
   let tail = (1.0 - smoothstep(0.1, 0.16, ax)) * step(-0.75, p.y) * step(p.y, -0.2);
-  let a = clamp(max(max(body, wing), tail), 0.0, 1.0) * in.alpha;
+  return clamp(max(max(body, wing), tail), 0.0, 1.0) * in.alpha;
+}
+
+@fragment
+fn fsHawk(in: BirdOut) -> @location(0) vec4f {
+  let a = hawkCoverage(in);
   return vec4f(in.col * a, a);
+}
+
+@fragment
+fn fsHawkCoverage(in: BirdOut) -> @location(0) vec4f {
+  let a = hawkCoverage(in);
+  return vec4f(a, 0.0, 0.0, a);
 }

@@ -1,8 +1,8 @@
 // The hawk (the file is not called hawk.js because ad blockers such as Brave Shields block that
 // name): not part of the simulated flock but a scripted predator. Every so often it makes one
 // curved pass (a quadratic Bezier) through the flock: it starts high and far to one side, dives
-// through a point near the flock centre and climbs out the other side. The starlings only see its
-// position (passed to the sim as the external predator).
+// through a point near the flock centre and climbs out the other side. The starlings see its
+// position and velocity (passed to the sim as the external predator).
 import { HAWK } from './config.js';
 
 const lerp = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
@@ -81,6 +81,8 @@ export class Hawk {
     }
     const { position, tangent } = bezier(this.attack, u);
     const len = Math.hypot(...tangent) || 1;
-    return { position, direction: tangent.map((v) => v / len) };
+    // u runs at a constant rate, so the true speed varies along the curve: tangent / duration
+    const own = tangent.map((v) => v / this.attack.duration);
+    return { position, direction: tangent.map((v) => v / len), velocity: own };
   }
 }

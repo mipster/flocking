@@ -39,6 +39,11 @@ describe('Hawk', () => {
     const flying = hawk.update(HAWK.firstDelay, target);
     expect(flying).not.toBeNull();
     expect(Math.hypot(...flying.direction)).toBeCloseTo(1, 6);
+    // its velocity is the real one along the curve: about the cruise speed, along the heading
+    const speed = Math.hypot(...flying.velocity);
+    expect(speed).toBeGreaterThan(HAWK.speed * 0.5);
+    expect(speed).toBeLessThan(HAWK.speed * 2);
+    flying.velocity.forEach((v, i) => expect(v / speed).toBeCloseTo(flying.direction[i], 6));
     const end = HAWK.firstDelay + hawk.attack.duration + 0.01;
     expect(hawk.update(end, target)).toBeNull();
     expect(hawk.nextAt).toBeGreaterThanOrEqual(end + HAWK.interval[0]);

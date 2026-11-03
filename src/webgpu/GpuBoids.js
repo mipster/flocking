@@ -82,20 +82,27 @@ export class GpuBoids {
       smoothing = DEFAULT_STEERING_SMOOTHING,
       minSpeed = 0.4,
       spawn = null,
+      cellSize = CELL_SIZE,
+      flight = null,
+      ground = null,
     } = {}
   ) {
     this.device = device;
     this.species = species;
     this.mode = mode;
     this.maxPerCell = maxPerCell;
-    this.smoothing = smoothing; // steering low-pass time constant in seconds; 0 disables
+    // steering low-pass time constant in seconds (0 disables); in banked flight it is the roll time
+    this.smoothing = flight ? flight.rollTime : smoothing;
     this.minSpeed = minSpeed; // slowest speed as a fraction of maxSpeed
-    // optional, set per frame by the caller: { center, radius: [x, y, z], strength } and
-    // { position, radius, weight } (see packSimParams)
+    this.flight = flight; // banked bird flight, see packSimParams; null = fish
+    this.cellSize = cellSize;
+    this.ground = ground; // flat ground height instead of the sea floor; null = sea floor
+    // optional, set per frame by the caller: { center, radius: [x, y, z], strength, roost? } and
+    // { position, radius, weight, velocity?, lookAhead? } (see packSimParams)
     this.home = null;
     this.predator = null;
     // x and z must be whole numbers of grid cells so the wrap seam lines up with a cell edge
-    const snap = (h) => (Math.ceil((2 * h) / CELL_SIZE) * CELL_SIZE) / 2;
+    const snap = (h) => (Math.ceil((2 * h) / cellSize) * cellSize) / 2;
     this.half = [snap(half[0]), half[1], snap(half[2])];
     this.wrap = wrap; // true: fish leaving the left/right edge re-enter opposite; false: soft side walls
     this.counts = counts;
@@ -104,7 +111,7 @@ export class GpuBoids {
     this.count = counts[0] + counts[1] + counts[2];
     this.time = 0;
 
-    this.dims = this.half.map((h) => Math.ceil((2 * h) / CELL_SIZE));
+    this.dims = this.half.map((h) => Math.ceil((2 * h) / cellSize));
     this.keys = this.dims[0] * this.dims[1] * this.dims[2] * SPECIES_COUNT;
 
     const S = GPUBufferUsage.STORAGE;
@@ -189,13 +196,15 @@ export class GpuBoids {
         maxPerCell: this.maxPerCell,
         half: this.half,
         wallMargin: WALL_MARGIN,
-        cellSize: CELL_SIZE,
+        cellSize: this.cellSize,
         dims: this.dims,
         wrap: this.wrap,
         smoothing: this.smoothing,
         minSpeed: this.minSpeed,
         home: this.home,
         predator: this.predator,
+        flight: this.flight,
+        ground: this.ground,
       })
     );
 

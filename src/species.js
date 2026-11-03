@@ -70,17 +70,22 @@ export const STARLING = {
   maxSpeed: 14,
   maxForce: 34,
   sepRadius: 1.4,
-  aliRadius: 3.0,
-  cohRadius: 4.5,
+  // with `neighbours` set these are the longest reach; each bird shrinks its own radius until
+  // about that many birds are inside, as real starlings track their ~7 nearest
+  aliRadius: 6,
+  cohRadius: 8,
   sepWeight: 1.8,
   aliWeight: 1.5,
-  cohWeight: 0.9,
+  // weak cohesion: with 7 neighbours each bird stays in touch anyway, and a stronger pull squeezes
+  // the flock into one ball instead of letting it stretch round the roost
+  cohWeight: 0.25,
   fearRadius: 0,
   fearWeight: 0,
   huntRadius: 0,
   huntWeight: 0,
   wander: 0.06,
-  farCohesion: 0.8,
+  farCohesion: 0, // not needed with topological neighbours; it only compresses the flock
+  neighbours: 7,
   glint: 0,
 };
 

@@ -13,7 +13,7 @@ Then open http://localhost:5173 for the fish, or http://localhost:5173/starlings
 
 Requires a browser with WebGPU (Chrome, Edge or Brave 113+ on macOS, Windows and ChromeOS) and Node 20.19 or newer (22.12+ also works) to run the dev server.
 
-- **Viewer** (`/`): the flock. Fish count (16k to 2M), neighbor mode (spatial grid or brute force), samples per cell, left/right edges (wrap around or soft walls), tank width and depth (80 to 400, which bounds the grid's single-thread prefix sum), and exact medium and large fish counts are in the panel.
+- **Viewer** (`/`): the flock. Fish count (16k to 2M), neighbor mode (spatial grid or brute force), samples per cell, left/right edges (wrap around or soft walls), tank width and depth (80 to 400, which bounds the grid's prefix sum over every cell), and exact medium and large fish counts are in the panel.
 - **Benchmark** (`/bench.html`): times simulation steps for WebGPU brute force and the grid at 4k to 1M fish. Keep the tab visible while it runs, because a hidden tab can skip GPU work and give bogus numbers.
 
 ## Benchmark baseline
@@ -94,14 +94,17 @@ Three species, each with its own speed, force limit and flocking weights:
 
 `/starlings.html` is a side demo: a starling flock wheeling over a lake at dusk, broken up now and then by a hawk diving through it. It is meant to look like a painting, so the camera is fixed.
 
-- **Same simulation as the fish.** `GpuBoids` runs one species in all three slots, with three generic hooks that leave the fish unchanged by default:
-  - a **home region** (a soft ellipsoid whose centre drifts slowly) that pulls the flock back when it strays;
-  - a **minimum speed** (starlings never hover);
-  - an **external predator** position and fear radius, set from the CPU each frame.
-- **Far cohesion** (species `farCohesion`, grid mode). Each bird compares how many birds sit in the 26 grid cells two cells away and steers toward the fuller side. Without it, local cohesion collapses the flock into separate balls. With it, the flock stays one body with sharp edges, like real murmurations, where each bird follows its few nearest neighbours however far away they are.
-- **Hawk** (`raptor.js`): a scripted curved pass. It starts high to one side, dives through a point near the flock and climbs away. It aims where the flock will be when it arrives, using the mean position and velocity of 256 birds read back from the GPU every half second (`flockSampler.js`). Birds within its fear radius flee at once, and the rest pick up the turn through alignment, which sends a wave through the flock.
+- **Same simulation as the fish.** `GpuBoids` runs one species in all three slots, with generic hooks that are all off for the fish:
+  - **Banked flight** (`flight`): a bird can't stop or sidestep. Every steer, the roost pull included, only turns it, taking about 0.25 s to roll into the turn; speed eases back to a cruise speed and climbing or diving is damped, so the flock flies flat and sweeps round in wide turns.
+  - **Topological neighbours** (species `neighbours`, 7 by default): each bird keeps its own alignment/cohesion radius and grows or shrinks it until about 7 birds are inside, as real starlings track their 7 nearest neighbours whatever the spacing. Starlings use a 3 m grid with 16 samples per cell so those close neighbours are actually found in the dense core.
+  - **Roost** (`home.roost`): a horizontal pull toward a drifting roost point, always on and full strength at the edge of a soft ellipsoid, plus a height limit. With banked flight the flock circles the roost instead of bouncing back from an edge.
+  - **Flat ground** (`ground`): the lake surface replaces the sea floor, so birds pull up within 10 m of the water and never go below it.
+  - a **minimum speed** (starlings never hover).
+- **Hawk** (`raptor.js`): a scripted curved pass. It starts high to one side, dives through a point near the flock and climbs away. It aims where the flock will be when it arrives, using the mean position and velocity of 256 birds read back from the GPU every half second (`flockSampler.js`). Birds look 1.2 s ahead along its path: any bird it would pass within its fear radius dodges sideways at once (no roll delay, with a burst of speed), so a gap opens ahead of the hawk, and the rest pick up the turn through alignment.
 - **Look** (`starlings.wgsl`): the sky gradient, low sun, two hill ranges, the lake (a rippled reflection with the sun's glitter path) and the reeds are all painted as functions of view direction in full-screen passes. Birds are dark soft specks flapping on the sim's wingbeat phase, some gliding. Specks never shrink below about a pixel, getting fainter instead, so dense parts pile up into solid black and distant birds fade slightly into the sky.
-- **Panel**: starling count, speed, roost pull, hawk on/off, a "send the hawk now" button, the hawk's fear radius and strength, and the starling steering parameters. Tuning lives in `src/starlings/config.js`, and the species in `src/species.js`.
+  - **Bank shading**: each bird's turn is measured against a running average of its velocity (`bank.wgsl`), which gives its bank angle; wings seen face-on draw darker and wider than wings seen edge-on, so turning parts of the flock darken.
+  - **Reflection**: the birds and hawk are drawn again mirrored in the water into a quarter-size coverage texture, which the lake reads through its ripples with a short vertical smear.
+- **Panel**: starling count, speed, roost pull, hawk on/off, a "send the hawk now" button, the hawk's fear radius and strength, and the starling steering parameters (including nearest neighbours). Tuning lives in `src/starlings/config.js`, and the species in `src/species.js`.
 
 ## Project layout
 

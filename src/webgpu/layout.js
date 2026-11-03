@@ -3,8 +3,11 @@
 // Floats only, in vec4 groups, so there is no padding to get wrong.
 import { SPECIES_COUNT } from './config.js';
 
-/** Total floats in the simulation `Params` uniform (7 x vec4f). */
-export const SIM_PARAMS_FLOATS = 28;
+/** Per-step blend of an exponential low-pass with time constant `tau` seconds (0 = no smoothing). */
+const expBlend = (dt, tau) => (tau > 0 ? 1 - Math.exp(-dt / tau) : 1);
+
+/** Total floats in the simulation `Params` uniform (10 x vec4f). */
+export const SIM_PARAMS_FLOATS = 40;
 
 /**
  * sim.wgsl `Params`:
@@ -13,8 +16,26 @@ export const SIM_PARAMS_FLOATS = 28;
  *   grid   = (cellSize, nx, ny, nz)
  *   flags  = (wrap, steering blend per step, minimum speed fraction, predator fear weight)
  *   home       = (centre xyz, pull strength; 0 = no home region)
- *   homeRadius = (ellipsoid radii xyz, 0)
+ *   homeRadius = (ellipsoid radii xyz, 1 = roost mode)
  *   predator   = (position xyz, fear radius; 0 = no predator)
+ *   flight     = (banked flight on, speed blend per step, cruise speed fraction, level-flight pull)
+ *   predatorVel = (predator velocity xyz, look-ahead seconds)
+ *   ground      = (flat ground height, 1 = use it instead of the sea floor, 0, 0)
+ *
+ * `home.roost`: instead of pulling back only from outside the ellipsoid, pull horizontally toward
+ * the centre all the time, growing to full strength at the ellipsoid's edge (height is still kept
+ * only from outside). With banked flight this makes birds circle the roost rather than bounce.
+ *
+ * `predator.velocity` / `predator.lookAhead`: animals flee from where the predator will pass
+ * closest to them within the next `lookAhead` seconds, sideways out of its path, not just from
+ * where it is now; without them the fear is radial from its current position.
+ *
+ * `ground` (a height, or null for the fish' sea floor): a flat bottom for the starlings' lake.
+ *
+ * `flight` ({ cruise, speedTime, level, rollTime }, or null for the fish) switches to a bird-like
+ * model: steering only turns the heading, through the steering low-pass (GpuBoids sets its time
+ * constant to `rollTime`, the time to roll into a turn), while speed eases back to `cruise` x maxSpeed with time constant `speedTime` seconds, and
+ * vertical speed is damped by `level` per second so the flock flies flat and turns in wide loops.
  */
 export function packSimParams({
   dt,
@@ -30,9 +51,11 @@ export function packSimParams({
   minSpeed = 0.4,
   home = null,
   predator = null,
+  flight = null,
+  ground = null,
 }) {
   // exponential low-pass: fraction of the new force blended in each step (1 = smoothing off)
-  const blend = smoothing > 0 ? 1 - Math.exp(-dt / smoothing) : 1;
+  const blend = expBlend(dt, smoothing);
   return new Float32Array([
     dt,
     time,
@@ -51,8 +74,11 @@ export function packSimParams({
     minSpeed,
     predator ? predator.weight : 0,
     ...(home ? [...home.center, home.strength] : [0, 0, 0, 0]),
-    ...(home ? [...home.radius, 0] : [1, 1, 1, 0]),
+    ...(home ? [...home.radius, home.roost ? 1 : 0] : [1, 1, 1, 0]),
     ...(predator ? [...predator.position, predator.radius] : [0, 0, 0, 0]),
+    ...(flight ? [1, expBlend(dt, flight.speedTime), flight.cruise, flight.level] : [0, 1, 0, 0]),
+    ...(predator?.velocity ? [...predator.velocity, predator.lookAhead ?? 0] : [0, 0, 0, 0]),
+    ...(ground === null ? [0, 0, 0, 0] : [ground, 1, 0, 0]),
   ]);
 }
 
@@ -64,7 +90,7 @@ export const SIM_SPECIES_STRIDE = 16;
  *   [maxSpeed, maxForce, sepRadius, aliRadius]
  *   [cohRadius, sepWeight, aliWeight, cohWeight]
  *   [fearRadius, fearWeight, huntRadius, huntWeight]
- *   [wander, scale, farCohesion, 0]   (farCohesion is optional, default 0)
+ *   [wander, scale, farCohesion, neighbours]   (the last two are optional, default 0 = off)
  */
 export function packSimSpecies(species) {
   const out = new Float32Array(SPECIES_COUNT * SIM_SPECIES_STRIDE);
@@ -86,7 +112,7 @@ export function packSimSpecies(species) {
         s.wander,
         s.scale,
         s.farCohesion ?? 0,
-        0,
+        s.neighbours ?? 0,
       ],
       i * SIM_SPECIES_STRIDE
     );
@@ -186,4 +212,15 @@ export function packStarlingUniforms({ viewProj, camera, time, viewportHeight, h
     out.set([...hawk.direction, hawk.phase], 36);
   }
   return out;
+}
+
+/** Floats in bank.wgsl `BankParams`. */
+export const BANK_PARAMS_FLOATS = 4;
+
+/**
+ * bank.wgsl `BankParams`: a = (blend toward the current velocity, bird count, 0, 0).
+ * The blend makes the average an exponential one with time constant `smoothing`, whatever dt is.
+ */
+export function packBankParams({ dt, smoothing, count }) {
+  return new Float32Array([expBlend(dt, smoothing), count, 0, 0]);
 }

@@ -2,26 +2,39 @@
 // Anything the shaders need is injected as WGSL `const`s by wgslHeader() so JS and WGSL
 // can never drift apart.
 
-/** Spatial grid cell edge, in world units. Neighbor search scans cells within the species' radius. */
+/**
+ * Default spatial grid cell edge, in world units. Neighbour search scans cells within the species'
+ * radius and samples at most `maxPerCell` from each, so dense flocks with short reach (starlings)
+ * pass a smaller cell to GpuBoids to keep those samples close.
+ */
 export const CELL_SIZE = 8;
 
 /**
  * Far cohesion (species `farCohesion` > 0, grid mode only): a fish or bird compares the number of
- * its own kind in the 26 cells this many cells away and steers toward the fuller side. It is a
- * cheap stand-in for the long-range pull of a few nearest neighbours however far away they are,
- * which keeps one big flock together instead of letting it break into balls.
+ * its own kind in the 26 cells about this far away (world units) and steers toward the fuller side.
+ * It is a cheap stand-in for the long-range pull of a few nearest neighbours however far away they
+ * are, which keeps one big flock together instead of letting it break into balls.
  */
-export const FAR_COHESION_CELLS = 2;
+export const FAR_COHESION_DISTANCE = 16;
 
 /**
- * Tank footprint the viewer allows (world units). The grid's prefix sum runs on one GPU thread over
- * every cell, so its cost follows the footprint, not the fish count: at these maxima it is about
- * 60k keys, which keeps that pass well under a millisecond.
+ * Topological neighbours (species `neighbours` > 0): each animal keeps its own alignment/cohesion
+ * radius and grows or shrinks it until about that many of its kind are inside, as starlings track
+ * their ~7 nearest neighbours whatever the spacing. This is the time constant of that adjustment, s.
+ */
+export const TOPO_ADAPT_TIME = 0.4;
+
+/**
+ * Tank footprint the viewer allows (world units). The grid's prefix sum walks every cell, so its
+ * cost follows the footprint, not the fish count: at these maxima it is about 60k keys.
  */
 export const TANK_LIMITS = { min: 80, maxWidth: 400, maxDepth: 400 };
 
 /** Compute workgroup size; must match `@workgroup_size` in sim.wgsl. */
 export const WORKGROUP_SIZE = 64;
+
+/** Threads in the grid prefix sum's single workgroup; each sums one contiguous run of cells. */
+export const SCAN_THREADS = 256;
 
 /** Distance from the tank edge where soft walls / the sea floor start pushing fish back. */
 export const WALL_MARGIN = 10;
@@ -454,7 +467,9 @@ export function wgslHeader() {
   const table = waveTable();
   return `
 const WORKGROUP_SIZE = ${WORKGROUP_SIZE}u;
-const FAR_COHESION_CELLS = ${FAR_COHESION_CELLS};
+const SCAN_THREADS = ${SCAN_THREADS}u;
+const FAR_COHESION_DISTANCE = ${FAR_COHESION_DISTANCE};
+const TOPO_ADAPT_TIME = ${TOPO_ADAPT_TIME};
 const SPECIES_COUNT = ${SPECIES_COUNT}u;
 ${vecConsts('FISH', FISH_LOOK)}
 ${vecConsts('SAND', SAND_LOOK)}

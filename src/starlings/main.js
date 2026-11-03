@@ -6,7 +6,17 @@ import { STARLING } from '../species.js';
 import { addSpeciesFolders } from '../gui.js';
 import { getDevice, GpuBoids } from '../webgpu/GpuBoids.js';
 import { FRAMES_IN_FLIGHT } from '../webgpu/config.js';
-import { BIRD_COUNTS, DEFAULT_BIRDS, HAWK, HOME, MIN_SPEED, SAMPLES_PER_CELL, SKY_BOX } from './config.js';
+import {
+  BIRD_COUNTS,
+  DEFAULT_BIRDS,
+  HAWK,
+  HOME,
+  MIN_SPEED,
+  GRID,
+  FLIGHT,
+  SKY_BOX,
+  WATER_Y,
+} from './config.js';
 import { FlockSampler } from './flockSampler.js';
 import { Hawk } from './raptor.js';
 import { StarlingRenderer } from './StarlingRenderer.js';
@@ -47,8 +57,11 @@ async function main() {
     boids = new GpuBoids(device, species, [Number(settings.birds), 0, 0], {
       half: SKY_BOX,
       wrap: false,
-      maxPerCell: SAMPLES_PER_CELL,
+      cellSize: GRID.cellSize,
+      maxPerCell: GRID.samplesPerCell,
       minSpeed: MIN_SPEED,
+      flight: FLIGHT,
+      ground: WATER_Y,
       spawn: { center: HOME.center, radius: HOME.radius },
     });
   }
@@ -92,11 +105,20 @@ async function main() {
       lastSample = simTime;
     }
     const flying = hawk.update(simTime, sampler.center ?? center, sampler.velocity);
-    boids.home = { center, radius: HOME.radius, strength: settings.homePull };
+    boids.home = { center, radius: HOME.radius, strength: settings.homePull, roost: true };
     boids.predator = flying
-      ? { position: flying.position, radius: settings.fearRadius, weight: settings.fearWeight }
+      ? {
+          position: flying.position,
+          velocity: flying.velocity,
+          lookAhead: HAWK.warning,
+          radius: settings.fearRadius,
+          weight: settings.fearWeight,
+        }
       : null;
-    if (dt > 0) boids.step(dt);
+    if (dt > 0) {
+      boids.step(dt);
+      renderer.trackVelocities(boids, dt);
+    }
 
     const dpr = Math.min(window.devicePixelRatio, settings.pixelRatio);
     renderer.resize(Math.floor(window.innerWidth * dpr), Math.floor(window.innerHeight * dpr));

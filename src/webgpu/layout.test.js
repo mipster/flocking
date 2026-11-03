@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { SPECIES } from '../species.js';
 import {
+  BANK_PARAMS_FLOATS,
   RENDER_SPECIES_STRIDE,
   RENDER_UNIFORM_FLOATS,
   STARLING_UNIFORM_FLOATS,
+  packBankParams,
   packStarlingUniforms,
   SIM_PARAMS_FLOATS,
   SIM_SPECIES_STRIDE,
@@ -29,17 +31,45 @@ describe('packSimParams', () => {
   };
   const p = packSimParams(base);
 
-  it('fills exactly seven vec4s', () => {
+  it('fills exactly ten vec4s', () => {
     expect(p.length).toBe(SIM_PARAMS_FLOATS);
-    expect(SIM_PARAMS_FLOATS).toBe(28);
+    expect(SIM_PARAMS_FLOATS).toBe(40);
   });
 
-  it('defaults to the fish behaviour: 40% minimum speed, no home region, no predator', () => {
+  it('defaults to the fish behaviour: 40% minimum speed, no home, predator or banked flight', () => {
     expect(p[14]).toBeCloseTo(0.4, 6); // flags.z
     expect(p[15]).toBe(0); // flags.w
     expect(p[19]).toBe(0); // home.w = off
     expect(Array.from(p.slice(20, 23))).toEqual([1, 1, 1]); // homeRadius never divides by zero
     expect(p[27]).toBe(0); // predator.w = none
+    expect(Array.from(p.slice(28, 32))).toEqual([0, 1, 0, 0]); // flight off
+    expect(Array.from(p.slice(32, 36))).toEqual([0, 0, 0, 0]); // predator standing still
+    expect(Array.from(p.slice(36, 40))).toEqual([0, 0, 0, 0]); // sea floor, not flat ground
+  });
+
+  it('packs a flat ground height, including 0', () => {
+    expect(Array.from(packSimParams({ ...base, ground: -46 }).slice(36, 40))).toEqual([-46, 1, 0, 0]);
+    expect(Array.from(packSimParams({ ...base, ground: 0 }).slice(36, 40))).toEqual([0, 1, 0, 0]);
+  });
+
+  it('packs roost mode and the predator velocity with its look-ahead', () => {
+    const q = packSimParams({
+      ...base,
+      home: { center: [0, 0, 0], radius: [50, 14, 22], strength: 1, roost: true },
+      predator: { position: [0, 0, 0], radius: 16, weight: 5, velocity: [30, -2, 0], lookAhead: 1.2 },
+    });
+    expect(q[23]).toBe(1);
+    expect(Array.from(q.slice(32, 36))).toEqual([30, -2, 0, expect.closeTo(1.2, 6)]);
+  });
+
+  it('packs banked flight with its speed time constant as a per-step blend', () => {
+    const q = packSimParams({ ...base, flight: { cruise: 0.85, speedTime: 0.5, level: 1.5 } });
+    expect(Array.from(q.slice(28, 32))).toEqual([
+      1,
+      expect.closeTo(1 - Math.exp(-0.016 / 0.5), 6),
+      expect.closeTo(0.85, 6),
+      1.5,
+    ]);
   });
 
   it('places the home region, predator and minimum speed', () => {
@@ -95,6 +125,7 @@ describe('packSimSpecies', () => {
       expect(out[o + 12]).toBeCloseTo(s.wander); // vec4 3: wander
       expect(out[o + 13]).toBeCloseTo(s.scale); // vec4 3: scale
       expect(out[o + 14]).toBe(s.farCohesion ?? 0); // vec4 3: far cohesion, off for fish
+      expect(out[o + 15]).toBe(s.neighbours ?? 0); // vec4 3: topological neighbours, off for fish
     });
   });
 });
@@ -210,5 +241,23 @@ describe('packStarlingUniforms', () => {
       hawk: { position: [4, 5, 6], direction: [0, 0, 1], phase: 2 },
     });
     expect(Array.from(out.slice(32, 40))).toEqual([4, 5, 6, 1, 0, 0, 1, 2]);
+  });
+});
+
+describe('packBankParams', () => {
+  it('blends by 1 - exp(-dt / smoothing) and carries the bird count', () => {
+    const p = packBankParams({ dt: 0.2, smoothing: 0.2, count: 4096 });
+    expect(p.length).toBe(BANK_PARAMS_FLOATS);
+    expect(p[0]).toBeCloseTo(1 - Math.exp(-1), 6);
+    expect(p[1]).toBe(4096);
+  });
+});
+
+describe('packSimSpecies with optional bird fields', () => {
+  it('packs far cohesion and topological neighbours when a species has them', () => {
+    const bird = { ...SPECIES[0], farCohesion: 0.8, neighbours: 7 };
+    const out = packSimSpecies([bird, bird, bird]);
+    expect(out[14]).toBeCloseTo(0.8, 6);
+    expect(out[15]).toBe(7);
   });
 });
