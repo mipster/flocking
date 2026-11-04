@@ -14,6 +14,7 @@ import {
   MIN_SPEED,
   GRID,
   FLIGHT,
+  WAVES,
   SKY_BOX,
   WATER_Y,
 } from './config.js';
@@ -61,6 +62,7 @@ async function main() {
       maxPerCell: GRID.samplesPerCell,
       minSpeed: MIN_SPEED,
       flight: FLIGHT,
+      waves: WAVES,
       ground: WATER_Y,
       spawn: { center: HOME.center, radius: HOME.radius },
     });

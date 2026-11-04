@@ -33,6 +33,20 @@ export const TANK_LIMITS = { min: 80, maxWidth: 400, maxDepth: 400 };
 /** Compute workgroup size; must match `@workgroup_size` in sim.wgsl. */
 export const WORKGROUP_SIZE = 64;
 
+/**
+ * Escape waves (see sim.wgsl integrate; the per-flock rates are packSimParams `waves`):
+ * - `copyBoost`: a panicked bird copies its neighbours' turns up to (1 + copyBoost) times faster;
+ * - `turn`: and sharpens its own turn by up to this x its maxForce;
+ * - `gain`: a bird the predator threatens panics fully at 1 / gain of the strongest threat;
+ * - `calm`: panic below this is ignored;
+ * - `hold`, `recovery` (s): after reacting a bird holds its panic `hold` s and ignores panicked
+ *   neighbours for `recovery` s in all, so one wave passes each bird once.
+ */
+export const PANIC = { copyBoost: 3, turn: 0.8, gain: 4, calm: 0.05, hold: 0.4, recovery: 2 };
+
+/** Snapshot vec4s per animal in the sim (sim.wgsl SNAP_STRIDE): 3 with turn and escape waves. */
+export const snapStride = (waves) => (waves ? 3 : 2);
+
 /** Threads in the grid prefix sum's single workgroup; each sums one contiguous run of cells. */
 export const SCAN_THREADS = 256;
 
@@ -470,6 +484,7 @@ const WORKGROUP_SIZE = ${WORKGROUP_SIZE}u;
 const SCAN_THREADS = ${SCAN_THREADS}u;
 const FAR_COHESION_DISTANCE = ${FAR_COHESION_DISTANCE};
 const TOPO_ADAPT_TIME = ${TOPO_ADAPT_TIME};
+${vecConsts('PANIC', PANIC)}
 const SPECIES_COUNT = ${SPECIES_COUNT}u;
 ${vecConsts('FISH', FISH_LOOK)}
 ${vecConsts('SAND', SAND_LOOK)}

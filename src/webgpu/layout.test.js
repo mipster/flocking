@@ -31,9 +31,9 @@ describe('packSimParams', () => {
   };
   const p = packSimParams(base);
 
-  it('fills exactly ten vec4s', () => {
+  it('fills exactly eleven vec4s', () => {
     expect(p.length).toBe(SIM_PARAMS_FLOATS);
-    expect(SIM_PARAMS_FLOATS).toBe(40);
+    expect(SIM_PARAMS_FLOATS).toBe(44);
   });
 
   it('defaults to the fish behaviour: 40% minimum speed, no home, predator or banked flight', () => {
@@ -45,6 +45,23 @@ describe('packSimParams', () => {
     expect(Array.from(p.slice(28, 32))).toEqual([0, 1, 0, 0]); // flight off
     expect(Array.from(p.slice(32, 36))).toEqual([0, 0, 0, 0]); // predator standing still
     expect(Array.from(p.slice(36, 40))).toEqual([0, 0, 0, 0]); // sea floor, not flat ground
+    expect(Array.from(p.slice(40, 44))).toEqual([0, 0, 0, 0]); // no turn or panic copying
+  });
+
+  it('packs the turn copying as a blend, the reaction time as is, and a per-step fade', () => {
+    const waves = { turnCopy: 0.2, panicCopy: 0.9, panicReact: 0.1, panicFade: 0.8 };
+    const flight = { cruise: 0.85, speedTime: 0.5, level: 1 };
+    expect(
+      packSimParams({ ...base, waves })
+        .slice(40, 44)
+        .every((v) => v === 0)
+    ).toBe(true);
+    expect(Array.from(packSimParams({ ...base, flight, waves }).slice(40, 44))).toEqual([
+      expect.closeTo(1 - Math.exp(-0.016 / 0.2), 6),
+      expect.closeTo(0.9, 6),
+      expect.closeTo(0.1, 6),
+      expect.closeTo(Math.exp(-0.016 / 0.8), 6),
+    ]);
   });
 
   it('packs a flat ground height, including 0', () => {

@@ -6,6 +6,7 @@ import {
   WALL_MARGIN,
   WORKGROUP_SIZE,
   SPECIES_COUNT,
+  snapStride,
   wgslHeader,
 } from './config.js';
 import { SIM_PARAMS_FLOATS, SIM_SPECIES_STRIDE, packSimParams, packSimSpecies } from './layout.js';
@@ -35,12 +36,15 @@ const ENTRY_POINTS = [
   'steerGrid',
 ];
 
-// The shader module, bind group layout and pipelines depend only on the device, not on fish counts
-// or tank size, so they are built once per device and shared by every flock rebuild.
+// The shader module, bind group layout and pipelines depend only on the device and the snapshot
+// stride (with or without waves), not on counts or tank size, so they are built once per device and
+// stride and shared by every flock rebuild.
 const pipelineCache = new WeakMap();
 
-function simPipelines(device) {
-  let cached = pipelineCache.get(device);
+function simPipelines(device, stride) {
+  const perDevice = pipelineCache.get(device) ?? new Map();
+  pipelineCache.set(device, perDevice);
+  let cached = perDevice.get(stride);
   if (cached) return cached;
   const module = device.createShaderModule({ code: wgslHeader() + floorWGSL + simWGSL });
   module.getCompilationInfo().then((info) => {
@@ -61,10 +65,13 @@ function simPipelines(device) {
   const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
   const pipes = {};
   for (const entryPoint of ENTRY_POINTS) {
-    pipes[entryPoint] = device.createComputePipeline({ layout, compute: { module, entryPoint } });
+    pipes[entryPoint] = device.createComputePipeline({
+      layout,
+      compute: { module, entryPoint, constants: { SNAP_STRIDE: stride } },
+    });
   }
   cached = { bgl, pipes };
-  pipelineCache.set(device, cached);
+  perDevice.set(stride, cached);
   return cached;
 }
 
@@ -85,6 +92,7 @@ export class GpuBoids {
       cellSize = CELL_SIZE,
       flight = null,
       ground = null,
+      waves = null,
     } = {}
   ) {
     this.device = device;
@@ -97,6 +105,8 @@ export class GpuBoids {
     this.flight = flight; // banked bird flight, see packSimParams; null = fish
     this.cellSize = cellSize;
     this.ground = ground; // flat ground height instead of the sea floor; null = sea floor
+    this.waves = flight ? waves : null; // turn and escape waves (banked flight only); null = off
+    const stride = snapStride(this.waves);
     // optional, set per frame by the caller: { center, radius: [x, y, z], strength, roost? } and
     // { position, radius, weight, velocity?, lookAhead? } (see packSimParams)
     this.home = null;
@@ -119,12 +129,13 @@ export class GpuBoids {
     const n = this.count;
     this.pos = mk(n * 16, S | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
     this.vel = mk(n * 16, S | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
-    this.spos = mk(n * 16, S);
-    this.svel = mk(n * 16, S);
+    this.snap = mk(n * 16 * stride, S); // position, velocity (and turn/panic with waves) per animal
     this.cellCount = mk(this.keys * 4, S);
     this.cellStart = mk((this.keys + 1) * 4, S);
     this.keyRank = mk(n * 8, S);
     this.smoothAccel = mk(n * 16, S);
+    // panic per bird (unused without waves); readable so ?debug can inspect it from the console
+    this.panic = mk(this.waves ? n * 8 : 0, S | GPUBufferUsage.COPY_SRC);
     this.params = mk(SIM_PARAMS_FLOATS * 4, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.specBuf = mk(
       SPECIES_COUNT * SIM_SPECIES_STRIDE * 4,
@@ -133,7 +144,7 @@ export class GpuBoids {
 
     this.upload(counts);
 
-    const { bgl, pipes } = simPipelines(device);
+    const { bgl, pipes } = simPipelines(device, stride);
     this.pipes = pipes;
     const b = (binding, buffer) => ({ binding, resource: { buffer } });
     this.bindGroup = device.createBindGroup({
@@ -143,12 +154,12 @@ export class GpuBoids {
         b(1, this.specBuf),
         b(2, this.pos),
         b(3, this.vel),
-        b(4, this.spos),
-        b(5, this.svel),
-        b(6, this.cellCount),
-        b(7, this.cellStart),
-        b(8, this.keyRank),
-        b(9, this.smoothAccel),
+        b(4, this.snap),
+        b(5, this.cellCount),
+        b(6, this.cellStart),
+        b(7, this.keyRank),
+        b(8, this.smoothAccel),
+        b(9, this.panic),
       ],
     });
   }
@@ -205,6 +216,7 @@ export class GpuBoids {
         predator: this.predator,
         flight: this.flight,
         ground: this.ground,
+        waves: this.waves,
       })
     );
 
@@ -238,12 +250,12 @@ export class GpuBoids {
     for (const k of [
       'pos',
       'vel',
-      'spos',
-      'svel',
+      'snap',
       'cellCount',
       'cellStart',
       'keyRank',
       'smoothAccel',
+      'panic',
       'params',
       'specBuf',
     ]) {

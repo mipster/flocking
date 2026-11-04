@@ -16,6 +16,8 @@ struct Params {
                      // w = level-flight pull (1/s); see integrate()
   predatorVel: vec4f, // predator velocity xyz, w = how many seconds ahead animals judge its path
   ground: vec4f,      // x = flat ground height, y = 1: use it instead of the sea floor
+  waves: vec4f,       // waves only (see waving()): x = turn-copy blend per step, y = panic passed on per
+                      // neighbour hop, z = reaction time (s), w = panic kept per step while fading
 };
 
 // height of whatever the animals must stay above: the sea floor, or flat ground (the starlings' lake)
@@ -24,6 +26,12 @@ fn groundY(xz: vec2f) -> f32 {
 }
 
 fn flying() -> bool { return P.flight.x > 0.5; }
+
+// Set per pipeline (GpuBoids): 3 when the flock passes turns and panic between neighbours (turn and
+// escape waves), else 2. The snapshot then carries a third vec4 per animal; with 2 the wave code
+// compiles away and the fish keep their old, tighter memory layout.
+override SNAP_STRIDE: u32 = 2u;
+fn waving() -> bool { return SNAP_STRIDE > 2u; }
 
 fn wrapOn() -> bool { return P.flags.x > 0.5; }
 
@@ -54,14 +62,35 @@ fn minImage(d: vec3f) -> vec3f {
 @group(0) @binding(1) var<uniform> SPEC: array<vec4f, SPECIES_COUNT * 4u>;
 @group(0) @binding(2) var<storage, read_write> pos: array<vec4f>;   // xyz, species
 @group(0) @binding(3) var<storage, read_write> vel: array<vec4f>;   // xyz, swim phase
-@group(0) @binding(4) var<storage, read_write> spos: array<vec4f>;  // snapshot (cell sorted in grid mode)
-@group(0) @binding(5) var<storage, read_write> svel: array<vec4f>;
-@group(0) @binding(6) var<storage, read_write> cellCount: array<atomic<u32>>;
-@group(0) @binding(7) var<storage, read_write> cellStart: array<u32>;
-@group(0) @binding(8) var<storage, read_write> keyRank: array<vec2u>; // per fish: (bucket key, rank in bucket)
+// Snapshot of every animal read by the neighbour search (cell sorted in grid mode), SNAP_STRIDE
+// vec4s each: position, velocity, then (waves only) its turn xyz and panic level. One interleaved
+// buffer keeps the sim within WebGPU's guaranteed 8 storage buffers per stage.
+@group(0) @binding(4) var<storage, read_write> snap: array<vec4f>;
+@group(0) @binding(5) var<storage, read_write> cellCount: array<atomic<u32>>;
+@group(0) @binding(6) var<storage, read_write> cellStart: array<u32>;
+@group(0) @binding(7) var<storage, read_write> keyRank: array<vec2u>; // per fish: (bucket key, rank in bucket)
 // per animal steering state: xyz = low-passed steering force (the current turn in banked flight),
 // w = its topological neighbour radius (0 until first set, unused when `neighbours` is 0)
-@group(0) @binding(9) var<storage, read_write> smoothAccel: array<vec4f>;
+@group(0) @binding(8) var<storage, read_write> smoothAccel: array<vec4f>;
+// waves only: x = panic level 0..1, y = countdown timer in seconds: above PANIC_RECOVERY a bird is
+// still reacting to a panicked neighbour; from PANIC_RECOVERY down to 0 it is recovering and ignores
+// its neighbours (so a wave passes each bird once), holding its panic for PANIC_HOLD, then fading
+@group(0) @binding(9) var<storage, read_write> panic: array<vec2f>;
+
+// write animal i into snapshot slot `slot`
+fn writeSnap(slot: u32, i: u32) {
+  snap[slot * SNAP_STRIDE] = pos[i];
+  snap[slot * SNAP_STRIDE + 1u] = vel[i];
+  if (waving()) { snap[slot * SNAP_STRIDE + 2u] = vec4f(smoothAccel[i].xyz, panic[i].x); }
+}
+
+fn snapPos(j: u32) -> vec4f { return snap[j * SNAP_STRIDE]; }
+fn snapVel(j: u32) -> vec4f { return snap[j * SNAP_STRIDE + 1u]; }
+// a neighbour's turn xyz and panic, or nothing without waves (no read at all then)
+fn snapState(j: u32) -> vec4f {
+  if (waving()) { return snap[j * SNAP_STRIDE + 2u]; }
+  return vec4f(0.0);
+}
 
 const TAU = 6.28318530718;
 
@@ -78,6 +107,8 @@ struct Acc {
   aliN: f32, cohN: f32, huntN: f32,
   far: vec3f, // density imbalance around me, 0..1 in length (grid mode only)
   topoN: f32, // estimated number of my kind within topoR (samples weighted by how many they stand for)
+  turn: vec3f, // sum of the alignment neighbours' current turns (averaged over aliN)
+  panicMax: f32, // the most panicked alignment neighbour
 };
 
 fn loadMe(i: u32) -> Me {
@@ -104,7 +135,7 @@ fn loadMe(i: u32) -> Me {
   return m;
 }
 
-fn consider(acc: ptr<function, Acc>, m: Me, ow: vec4f, ov: vec3f, sepScale: f32) {
+fn consider(acc: ptr<function, Acc>, m: Me, ow: vec4f, ov: vec3f, os: vec4f, sepScale: f32) {
   if (ow.w < 0.0) { return; }
   let d = minImage(m.pos - ow.xyz);
   let opos = m.pos - d;
@@ -119,7 +150,14 @@ fn consider(acc: ptr<function, Acc>, m: Me, ow: vec4f, ov: vec3f, sepScale: f32)
 
   if (osp == m.sp) {
     if (dist < m.topoR) { (*acc).topoN += sepScale; }
-    if (dist < m.aliR) { (*acc).ali += ov; (*acc).aliN += 1.0; }
+    if (dist < m.aliR) {
+      (*acc).ali += ov;
+      (*acc).aliN += 1.0;
+      if (waving()) {
+        (*acc).turn += os.xyz;
+        (*acc).panicMax = max((*acc).panicMax, os.w);
+      }
+    }
     if (dist < m.cohR) { (*acc).coh += opos; (*acc).cohN += 1.0; }
   } else if (osp > m.sp) {
     if (dist < m.fearR) { (*acc).fear += (d / dist) * (1.0 - dist / m.fearR); }
@@ -146,9 +184,10 @@ fn pushAway(v: vec3f, maxForce: f32) -> vec3f {
 // External predator (driven from the CPU). Animals judge where it will pass closest to them within
 // the next predatorVel.w seconds and flee sideways out of that path, so a gap opens ahead of it;
 // the rest of the flock picks the dodge up through alignment, which sends a wave through it.
-fn predatorEscape(m: Me) -> vec3f {
+// Returns the dodge (xyz) and how threatened I am (w, 0..1, before the fear weight).
+fn predatorEscape(m: Me) -> vec4f {
   let radius = P.predator.w;
-  if (radius <= 0.0) { return vec3f(0.0); }
+  if (radius <= 0.0) { return vec4f(0.0); }
   let d = m.pos - P.predator.xyz;
   let u = P.predatorVel.xyz;
   let look = P.predatorVel.w;
@@ -156,9 +195,10 @@ fn predatorEscape(m: Me) -> vec3f {
   let t = select(0.0, clamp(dot(d, u) / max(uu, 1e-6), 0.0, look), uu > 0.0 && look > 0.0);
   let off = d - u * t;
   let miss = length(off);
-  if (miss >= radius || miss < 1e-4) { return vec3f(0.0); }
+  if (miss >= radius || miss < 1e-4) { return vec4f(0.0); }
   let soon = select(1.0, 1.0 - t / look, look > 0.0);
-  return (off / miss) * (1.0 - miss / radius) * soon * m.maxForce * P.flags.w;
+  let threat = (1.0 - miss / radius) * soon;
+  return vec4f((off / miss) * threat * m.maxForce * P.flags.w, threat);
 }
 
 fn integrate(i: u32, m: Me, a: Acc) {
@@ -205,7 +245,8 @@ fn integrate(i: u32, m: Me, a: Acc) {
       }
     }
   }
-  let escape = predatorEscape(m);
+  let fled = predatorEscape(m);
+  let escape = fled.xyz;
 
   // Low-pass blend per step. Dense flocks sample neighbours stochastically and jostle, so the raw
   // force fluctuates frame to frame; smoothing keeps headings from twitching.
@@ -224,9 +265,39 @@ fn integrate(i: u32, m: Me, a: Acc) {
     let tl = length(turn);
     turn = select(turn, turn * (m.maxForce / tl), tl > m.maxForce);
     state = mix(state, turn, alpha);
+
+    var p = 0.0;
+    if (waving()) {
+      // Escape copying (agitation waves): a bird the predator threatens panics fully. A calm bird
+      // that sees a panicked neighbour reacts after a short delay, taking on its panic a little
+      // weaker, then holds it, lets it fade and ignores its neighbours until it has recovered, so
+      // the wave passes each bird once, hop by hop, weakening by the copy factor per hop.
+      let was = panic[i];
+      let caught = P.waves.y * a.panicMax;
+      p = was.x;
+      var timer = max(was.y - dt, 0.0);
+      if (was.y > PANIC_RECOVERY && timer <= PANIC_RECOVERY) { p = max(p, caught); } // reacts now
+      if (timer < PANIC_RECOVERY - PANIC_HOLD) { p *= P.waves.w; } // calm, or past the hold
+      if (was.y == 0.0 && caught > PANIC_CALM) { timer = PANIC_RECOVERY + max(P.waves.z, 1e-4); }
+      let threat = saturate(PANIC_GAIN * fled.w);
+      if (threat > p) {
+        p = threat;
+        timer = PANIC_RECOVERY;
+      }
+      panic[i] = vec2f(p, timer);
+
+      // Turn copying (turn waves): match my turn to my neighbours' current turns, not just their
+      // headings, so a turn passes on from bird to bird instead of dying out. Panic copies harder.
+      if (a.aliN > 0.0) {
+        state = mix(state, a.turn / a.aliN, saturate(P.waves.x * (1.0 + PANIC_COPY_BOOST * p)));
+      }
+    }
     state -= h * dot(state, h);
     force = state + h * ((P.flight.z * m.maxSpeed - speed) * P.flight.y / dt);
-    // panic skips the roll-in: the dodge turns at once and may also speed the bird up
+    // panic sharpens whatever turn I am in (the dark band of an agitation wave is that sudden roll)
+    let sl = length(state);
+    if (sl > 1e-4) { force += state / sl * p * PANIC_TURN * m.maxForce; }
+    // the direct dodge skips the roll-in: it turns at once and may also speed the bird up
     force += escape - h * min(dot(escape, h), 0.0);
   } else {
     // fish: the pulls are added after the low-pass so the home region and a predator act at once
@@ -315,8 +386,7 @@ fn cellOfPos(p: vec3f) -> vec3i {
 fn snapshot(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i >= u32(P.a.z)) { return; }
-  spos[i] = pos[i];
-  svel[i] = vel[i];
+  writeSnap(i, i);
 }
 
 var<workgroup> tp: array<vec4f, WORKGROUP_SIZE>;
@@ -334,8 +404,8 @@ fn steerBrute(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocati
   for (var t = 0u; t < tiles; t++) {
     let j = t * WORKGROUP_SIZE + lid;
     if (j < n) {
-      tp[lid] = spos[j];
-      tv[lid] = svel[j];
+      tp[lid] = snapPos(j);
+      tv[lid] = snapVel(j);
     } else {
       tp[lid] = vec4f(0.0, 0.0, 0.0, -1.0);
       tv[lid] = vec4f(0.0);
@@ -343,7 +413,7 @@ fn steerBrute(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocati
     workgroupBarrier();
     if (valid) {
       for (var k = 0u; k < WORKGROUP_SIZE; k++) {
-        consider(&acc, m, tp[k], tv[k].xyz, 1.0);
+        consider(&acc, m, tp[k], tv[k].xyz, snapState(t * WORKGROUP_SIZE + k), 1.0);
       }
     }
     workgroupBarrier();
@@ -408,8 +478,7 @@ fn scatter(@builtin(global_invocation_id) gid: vec3u) {
   if (i >= u32(P.a.z)) { return; }
   let kr = keyRank[i];
   let dst = cellStart[kr.x] + kr.y;
-  spos[dst] = pos[i];
-  svel[dst] = vel[i];
+  writeSnap(dst, i);
 }
 
 @compute @workgroup_size(WORKGROUP_SIZE)
@@ -460,7 +529,7 @@ fn steerGrid(@builtin(global_invocation_id) gid: vec3u) {
           let sc = f32(cnt) / f32(n);
           for (var k = 0u; k < n; k++) {
             let j = start + (off + k) % cnt;
-            consider(&acc, m, spos[j], svel[j].xyz, sc);
+            consider(&acc, m, snapPos(j), snapVel(j).xyz, snapState(j), sc);
           }
         }
       }

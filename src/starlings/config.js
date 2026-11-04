@@ -30,6 +30,14 @@ export const GRID = { cellSize: 3, samplesPerCell: 16 };
 export const FLIGHT = { cruise: 0.85, speedTime: 0.6, level: 3, rollTime: 0.25 };
 
 /**
+ * Turn and escape waves (see packSimParams `waves`): each bird matches its neighbours' turns over
+ * `turnCopy` s; a scared bird passes on `panicCopy` of its panic to the next, `panicReact` s after
+ * that one panicked, and panic fades over `panicFade` s. One hop is a metre or two, so the wave runs
+ * at very roughly 1.5 m / panicReact and weakens by panicCopy per hop.
+ */
+export const WAVES = { turnCopy: 0.3, panicCopy: 0.97, panicReact: 0.06, panicFade: 0.5 };
+
+/**
  * Roost: the flock is always drawn horizontally toward the centre (full strength at the ellipsoid's
  * edge) and kept within its height; with banked flight the birds circle it. The centre drifts
  * slowly (amplitude `drift`, one period in seconds per axis) so the circling keeps changing shape.

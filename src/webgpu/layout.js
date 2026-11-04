@@ -6,8 +6,8 @@ import { SPECIES_COUNT } from './config.js';
 /** Per-step blend of an exponential low-pass with time constant `tau` seconds (0 = no smoothing). */
 const expBlend = (dt, tau) => (tau > 0 ? 1 - Math.exp(-dt / tau) : 1);
 
-/** Total floats in the simulation `Params` uniform (10 x vec4f). */
-export const SIM_PARAMS_FLOATS = 40;
+/** Total floats in the simulation `Params` uniform (11 x vec4f). */
+export const SIM_PARAMS_FLOATS = 44;
 
 /**
  * sim.wgsl `Params`:
@@ -21,6 +21,7 @@ export const SIM_PARAMS_FLOATS = 40;
  *   flight     = (banked flight on, speed blend per step, cruise speed fraction, level-flight pull)
  *   predatorVel = (predator velocity xyz, look-ahead seconds)
  *   ground      = (flat ground height, 1 = use it instead of the sea floor, 0, 0)
+ *   waves       = (turn-copy blend, panic passed on per hop, reaction time s, panic kept per step)
  *
  * `home.roost`: instead of pulling back only from outside the ellipsoid, pull horizontally toward
  * the centre all the time, growing to full strength at the ellipsoid's edge (height is still kept
@@ -31,6 +32,11 @@ export const SIM_PARAMS_FLOATS = 40;
  * where it is now; without them the fear is radial from its current position.
  *
  * `ground` (a height, or null for the fish' sea floor): a flat bottom for the starlings' lake.
+ *
+ * `waves` ({ turnCopy, panicCopy, panicReact, panicFade }, with `flight` only; GpuBoids also
+ * builds its pipelines for them, see sim.wgsl SNAP_STRIDE): each bird matches its
+ * turn to its neighbours' turns with time constant `turnCopy` s; a bird takes on `panicCopy` x a
+ * panicked neighbour's panic `panicReact` s after seeing it, and panic fades with `panicFade` s.
  *
  * `flight` ({ cruise, speedTime, level, rollTime }, or null for the fish) switches to a bird-like
  * model: steering only turns the heading, through the steering low-pass (GpuBoids sets its time
@@ -53,6 +59,7 @@ export function packSimParams({
   predator = null,
   flight = null,
   ground = null,
+  waves = null,
 }) {
   // exponential low-pass: fraction of the new force blended in each step (1 = smoothing off)
   const blend = expBlend(dt, smoothing);
@@ -79,6 +86,9 @@ export function packSimParams({
     ...(flight ? [1, expBlend(dt, flight.speedTime), flight.cruise, flight.level] : [0, 1, 0, 0]),
     ...(predator?.velocity ? [...predator.velocity, predator.lookAhead ?? 0] : [0, 0, 0, 0]),
     ...(ground === null ? [0, 0, 0, 0] : [ground, 1, 0, 0]),
+    ...(waves && flight
+      ? [expBlend(dt, waves.turnCopy), waves.panicCopy, waves.panicReact, 1 - expBlend(dt, waves.panicFade)]
+      : [0, 0, 0, 0]),
   ]);
 }
 
